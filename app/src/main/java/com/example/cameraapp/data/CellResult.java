@@ -11,6 +11,7 @@ public class CellResult {
     private final double longitude;
     private final float accuracy; // GPS精度
     private float confidence;      // AIの自信度 (0-100)
+    private volatile boolean uploaded; // クラウド(S3)へアップロード済みか
 
     public CellResult(int index, int row, int col, String result, long timestamp, String imagePath, double latitude, double longitude, float accuracy) {
         this.index = index;
@@ -37,6 +38,9 @@ public class CellResult {
     
     public float getConfidence() { return confidence; }
     public void setConfidence(float confidence) { this.confidence = confidence; }
+
+    public boolean isUploaded() { return uploaded; }
+    public void setUploaded(boolean uploaded) { this.uploaded = uploaded; }
 
     @Override
     public String toString() {

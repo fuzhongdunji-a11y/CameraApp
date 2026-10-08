@@ -11,6 +11,7 @@ import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.location.Location;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
@@ -28,13 +29,11 @@ import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
-import com.amplifyframework.auth.cognito.AWSCognitoAuthPlugin;
-import com.amplifyframework.core.Amplify;
-import com.amplifyframework.core.configuration.AmplifyOutputs;
-import com.amplifyframework.storage.s3.AWSS3StoragePlugin;
+import com.example.cameraapp.cloud.CloudUploader;
 import com.example.cameraapp.R;
 import com.example.cameraapp.data.CellResult;
 import com.example.cameraapp.data.ResultRepository;
+import com.example.cameraapp.inference.BestFrameSelector;
 import com.example.cameraapp.inference.InferencePipeline;
 import com.example.cameraapp.PlantClassifier;
 import com.example.cameraapp.ui.AbnormalListActivity;
@@ -78,8 +77,20 @@ public class MainActivity extends AppCompatActivity {
 
     private volatile boolean isProcessingFrame = false;
 
-    private long lastAutoSaveTime = 0;
-    private static final long AUTO_SAVE_INTERVAL = 500; // 0.5秒ごとに自動保存
+    // 最初のフレームを保存済みの区画番号（区画が変わると再び最初のフレームを保存する）
+    private volatile int firstFrameSavedCell = -1;
+    // 区画の最初に保存した写真の記録（異常記録・病気判別時に破棄する。UIスレッドでのみ操作）
+    private CellResult firstFrameRecord;
+
+    // 「異常あり」ボタンで開始し、もう一度押すまで2秒ごとに1枚保存する
+    private volatile boolean abnormalRecording = false;
+    private int abnormalSavedCount = 0;
+
+    // 病気のフレーム・異常記録のフレームは、2秒ごとにその間で最もブレの少ない1枚を保存する
+    // （候補の追加・保存は cameraExecutor 上でのみ行う）
+    private static final long BEST_FRAME_WINDOW_MS = 2000;
+    private final BestFrameSelector diseaseSelector = new BestFrameSelector(BEST_FRAME_WINDOW_MS);
+    private final BestFrameSelector abnormalSelector = new BestFrameSelector(BEST_FRAME_WINDOW_MS);
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -87,14 +98,8 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         // --- ★ここから追加：Amplifyの初期化 ---
-        try {
-            Amplify.addPlugin(new AWSCognitoAuthPlugin());
-            Amplify.addPlugin(new AWSS3StoragePlugin());
-            Amplify.configure(AmplifyOutputs.fromResource(R.raw.amplify_outputs), getApplicationContext());
-            Log.i("AmplifyGen2", "Amplifyの初期化に成功しました！");
+        if (CloudUploader.ensureInitialized(this)) {
             uploadTestFile();
-        } catch (Exception error) {
-            Log.e("AmplifyGen2", "初期化エラー", error);
         }
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
@@ -139,7 +144,7 @@ public class MainActivity extends AppCompatActivity {
             fos.close();
 
             String s3Key = "public/captures/" + fileName;
-            uploadFileToS3(testFile, s3Key);
+            CloudUploader.uploadFile(testFile, s3Key);
         } catch (Exception e) {
             Log.e("AmplifyGen2", "テストファイル作成・アップロード失敗", e);
         }
@@ -156,13 +161,92 @@ public class MainActivity extends AppCompatActivity {
             finishWork();
         });
 
-        findViewById(R.id.btnAbnormal).setOnClickListener(v -> saveManualRecord("Manual_Capture"));
+        findViewById(R.id.btnAbnormal).setOnClickListener(v -> {
+            if (abnormalRecording) stopAbnormalRecording();
+            else startAbnormalRecording();
+        });
 
         findViewById(R.id.btnFinish).setOnClickListener(v -> {
             startActivity(new Intent(this, AbnormalListActivity.class));
         });
 
         findViewById(R.id.btnNextCell).setOnClickListener(v -> goToNextCell());
+    }
+
+    private void startAbnormalRecording() {
+        abnormalRecording = true;
+        abnormalSavedCount = 0;
+        // 最初の写真は破棄し、以降は最初のフレームとして保存しない
+        discardFirstFrame(currentCellIndex);
+        firstFrameSavedCell = currentCellIndex;
+        ((Button) findViewById(R.id.btnAbnormal)).setText("異常記録停止");
+        Toast.makeText(this, "異常記録を開始しました", Toast.LENGTH_SHORT).show();
+    }
+
+    private void stopAbnormalRecording() {
+        stopAbnormalRecording(null);
+    }
+
+    /** 異常記録を停止し、保存待ちのフレームを保存してから onDone を UI スレッドで実行する */
+    private void stopAbnormalRecording(@Nullable Runnable onDone) {
+        boolean wasRecording = abnormalRecording;
+        abnormalRecording = false;
+        if (wasRecording) ((Button) findViewById(R.id.btnAbnormal)).setText("異常あり");
+        flushPendingFrames(() -> {
+            if (wasRecording) {
+                Toast.makeText(this, "異常記録を停止しました（" + abnormalSavedCount + "枚保存）", Toast.LENGTH_SHORT).show();
+            }
+            if (onDone != null) onDone.run();
+        });
+    }
+
+    /** 2秒経過前の保存待ちフレーム（病気・異常記録）を保存し、完了後に onDone を UI スレッドで実行する */
+    private void flushPendingFrames(@Nullable Runnable onDone) {
+        cameraExecutor.execute(() -> {
+            BestFrameSelector.Candidate abnormal = abnormalSelector.flush();
+            String abnormalPath = saveAbnormalCandidate(abnormal);
+            BestFrameSelector.Candidate disease = diseaseSelector.flush();
+            String diseasePath = saveDiseaseCandidate(disease);
+            runOnUiThread(() -> {
+                if (abnormalPath != null) onAbnormalFrameSaved(abnormal.cellIndex, abnormalPath, null);
+                if (diseasePath != null) onDiseaseFrameSaved(disease, diseasePath);
+                if (onDone != null) onDone.run();
+            });
+        });
+    }
+
+    /** 異常記録の候補フレームを保存する（候補がなければ null） */
+    private String saveAbnormalCandidate(@Nullable BestFrameSelector.Candidate c) {
+        if (c == null || pipeline == null) return null;
+        String dateStr = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+        String nestedPath = "Cell_" + c.cellIndex + "/Manual/Manual_Capture/" + dateStr;
+        return pipeline.saveToNestedFolder(c.bitmap, nestedPath, "manual_" + System.nanoTime() + ".jpg");
+    }
+
+    /** 病気と判別した候補フレームを保存する（候補がなければ null） */
+    private String saveDiseaseCandidate(@Nullable BestFrameSelector.Candidate c) {
+        if (c == null || pipeline == null) return null;
+        return pipeline.saveClassified(c.bitmap, c.cellIndex, c.label, c.confidence);
+    }
+
+    /** 病気のフレームを保存した記録を登録する（UIスレッド） */
+    private void onDiseaseFrameSaved(BestFrameSelector.Candidate c, String path) {
+        // S3 へのアップロードはマップ画面の「クラウドに保存」ボタンで行う
+        saveResultToMap(c.cellIndex, c.label, path, c.confidence);
+        // 病気と判別したフレームを保存した場合、正常だった最初の写真は破棄
+        CellResult first = firstFrameRecord;
+        if (first != null && first.getIndex() == c.cellIndex && "healthy".equalsIgnoreCase(first.getResult())) {
+            discardFirstFrame(c.cellIndex);
+        }
+    }
+
+    /** 区画の最初に保存した写真を破棄する（ファイルと記録を削除） */
+    private void discardFirstFrame(int cellIndex) {
+        CellResult first = firstFrameRecord;
+        if (first == null || first.getIndex() != cellIndex) return;
+        firstFrameRecord = null;
+        if (first.getImagePath() != null) new File(first.getImagePath()).delete();
+        ResultRepository.INSTANCE.remove(first);
     }
 
     private void processIncomingBitmap(Bitmap bitmap, boolean manual) {
@@ -172,38 +256,73 @@ public class MainActivity extends AppCompatActivity {
         cameraExecutor.execute(() -> {
             try {
                 if (pipeline != null) {
-                    long now = System.currentTimeMillis();
-                    // 手動保存、または前回の自動保存から0.5秒以上経過している場合に保存フラグを立てる
-                    boolean shouldTrySave = manual || (now - lastAutoSaveTime >= AUTO_SAVE_INTERVAL);
+                    int cellIndex = currentCellIndex;
 
-                    InferencePipeline.Result result = pipeline.process(bitmap, currentCellIndex, shouldTrySave);
+                    long now = SystemClock.elapsedRealtime();
+
+                    // 異常記録中は判別結果に関係なく、2秒ごとに最もブレの少ないフレームを保存する
+                    if (abnormalRecording && !manual) {
+                        InferencePipeline.Result result = pipeline.process(bitmap, cellIndex, false);
+                        abnormalSelector.offer(bitmap, cellIndex, result.getLabel(), result.getConfidence(), now);
+                        String path = saveAbnormalCandidate(abnormalSelector.pollIfExpired(now));
+                        runOnUiThread(() -> onAbnormalFrameSaved(cellIndex, path, result));
+                        return;
+                    }
+
+                    // この区画でまだ最初に判別したフレームを保存していなければ、結果に関係なく保存
+                    boolean isFirstFrame = firstFrameSavedCell != cellIndex;
+                    // 2フレーム目以降の自動保存では、正常(healthy)のフレームは保存せず、
+                    // 病気のフレームは2秒ごとにその間で最もブレの少ない1枚を保存する
+                    boolean autoDisease = !manual && !isFirstFrame;
+
+                    // 緑不足のフレームは判別・保存されない
+                    InferencePipeline.Result result = pipeline.process(bitmap, cellIndex, !autoDisease);
+                    if (isFirstFrame && result != null && result.getSavedImagePath() != null) {
+                        firstFrameSavedCell = cellIndex;
+                    }
+
+                    BestFrameSelector.Candidate diseaseFrame = null;
+                    String diseasePath = null;
+                    if (autoDisease && result != null) {
+                        boolean diseased = result.getGreenRatio() >= pipeline.getConfig().getGreenThreshold()
+                                && !"healthy".equalsIgnoreCase(result.getLabel());
+                        if (diseased) {
+                            diseaseSelector.offer(bitmap, cellIndex, result.getLabel(), result.getConfidence(), now);
+                        }
+                        diseaseFrame = diseaseSelector.pollIfExpired(now);
+                        diseasePath = saveDiseaseCandidate(diseaseFrame);
+                    }
+                    boolean diseasePending = autoDisease && diseaseSelector.hasCandidate();
+                    BestFrameSelector.Candidate savedDiseaseFrame = diseaseFrame;
+                    String savedDiseasePath = diseasePath;
 
                     runOnUiThread(() -> {
                         if (result != null) {
                             float threshold = 0.25f;
-                            // 保存された場合（閾値を超え、かつタイミングが合った場合）
-                            if (result.getSavedImagePath() != null) {
-                                if (!manual) {
-                                    lastAutoSaveTime = now;
+                            String savedPath = result.getSavedImagePath();
+                            if (savedPath != null) {
+                                // S3 へのアップロードはマップ画面の「クラウドに保存」ボタンで行う
+                                CellResult saved = saveResultToMap(cellIndex, result.getLabel(), savedPath, result.getConfidence());
+
+                                if (manual) {
+                                    Toast.makeText(this, "手動保存しました", Toast.LENGTH_SHORT).show();
+                                } else if (isFirstFrame) {
+                                    firstFrameRecord = saved;
                                 }
-                                saveResultToMap(result.getLabel(), result.getSavedImagePath(), result.getConfidence());
-
-                                // 西暦_日付形式（例: 2026_10_07_123847）のファイル名でS3に保存
-                                String dateTimeStr = new SimpleDateFormat("yyyy_MM_dd_HHmmss", Locale.getDefault()).format(new Date());
-                                String s3ImageKey = "public/captures/" + dateTimeStr + ".jpg";
-
-                                File imageFile = new File(result.getSavedImagePath());
-                                uploadFileToS3(imageFile, s3ImageKey);
-
-                                // 判定結果（テキスト）ファイルを生成してS3にアップロード
-                                uploadResultTextToS3(result.getLabel(), result.getConfidence(), result.getGreenRatio(), currentCellIndex, dateTimeStr + ".jpg", dateTimeStr);
-
-                                if (manual) Toast.makeText(this, "手動保存しました", Toast.LENGTH_SHORT).show();
                             }
+                            if (savedDiseasePath != null) onDiseaseFrameSaved(savedDiseaseFrame, savedDiseasePath);
 
-                            String status = result.getSavedImagePath() != null ? "【保存完了】" : "【待機中】";
-                            if (result.getGreenRatio() < threshold) {
+                            String status;
+                            if (savedPath != null) {
+                                status = isFirstFrame && !manual ? "【初回フレーム保存】" : "【保存完了】";
+                            } else if (savedDiseasePath != null) {
+                                status = "【保存完了】";
+                            } else if (diseasePending) {
+                                status = "【病気検出・保存待ち】";
+                            } else if (result.getGreenRatio() < threshold) {
                                 status = "【緑不足】";
+                            } else {
+                                status = "【待機中】";
                             }
 
                             // 精度を上げるため、判定(Confidence)を小数第3位まで表示するように変更
@@ -222,12 +341,34 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void saveResultToMap(String label, String path, float confidence) {
-        int zeroIndex = currentCellIndex - 1;
-        CellResult res = new CellResult(currentCellIndex, zeroIndex / gridCols, zeroIndex % gridCols,
+    private void onAbnormalFrameSaved(int cellIndex, String path, InferencePipeline.Result result) {
+        if (path != null) {
+            if (abnormalSavedCount == 0) {
+                // 判定履歴には異常記録1回につき1件（最初のフレーム）のみ登録する
+                AbnormalRecord record = new AbnormalRecord(cellIndex, selectedPlant, path, 1.0f, System.currentTimeMillis(), "Manual_Capture");
+                AbnormalRepository.INSTANCE.add(record);
+            }
+            abnormalSavedCount++;
+            saveResultToMap(cellIndex, "Manual_Capture", path, 100.0f);
+        }
+        if (result != null) {
+            resultTextView.setText(String.format(Locale.getDefault(),
+                    "【異常記録中】%d枚保存\n判定: %s (%.3f%%)\n緑比率: %.3f",
+                    abnormalSavedCount, result.getLabel(), result.getConfidence(), result.getGreenRatio()));
+        }
+    }
+
+    private CellResult saveResultToMap(String label, String path, float confidence) {
+        return saveResultToMap(currentCellIndex, label, path, confidence);
+    }
+
+    private CellResult saveResultToMap(int cellIndex, String label, String path, float confidence) {
+        int zeroIndex = cellIndex - 1;
+        CellResult res = new CellResult(cellIndex, zeroIndex / gridCols, zeroIndex % gridCols,
                 label, System.currentTimeMillis(), path, 0.0, 0.0, 0f);
         res.setConfidence(confidence);
         ResultRepository.INSTANCE.add(res);
+        return res;
     }
 
     private void saveManualRecord(String trigger) {
@@ -241,95 +382,19 @@ public class MainActivity extends AppCompatActivity {
         if (path != null) {
             AbnormalRecord record = new AbnormalRecord(currentCellIndex, selectedPlant, path, 1.0f, System.currentTimeMillis(), trigger);
             AbnormalRepository.INSTANCE.add(record);
+            // S3 へのアップロードはマップ画面の「クラウドに保存」ボタンで行う
             saveResultToMap(trigger, path, 100.0f);
-
-            // 西暦_日付形式（例: 2026_10_07_123847）のファイル名でS3に保存
-            String dateTimeStr = new SimpleDateFormat("yyyy_MM_dd_HHmmss", Locale.getDefault()).format(new Date());
-            String s3ImageKey = "public/captures/" + dateTimeStr + ".jpg";
-
-            File imageFile = new File(path);
-            uploadFileToS3(imageFile, s3ImageKey);
-
-            // 判定結果（テキスト）ファイルを生成してS3にアップロード
-            uploadResultTextToS3("【手動記録】" + trigger, 100.0f, 1.0f, currentCellIndex, dateTimeStr + ".jpg", dateTimeStr);
         }
     }
-
-    // 判定結果（テキストデータ）をファイルとして生成し、S3へアップロードする関数
-    private void uploadResultTextToS3(String label, float confidence, float greenRatio, int cellIndex, String imageFileName, String dateTimeStr) {
-        String textFileName = dateTimeStr + "_result.txt";
-
-        String content = "======== 判定結果レポート ========\n" +
-                "日時: " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date()) + "\n" +
-                "西暦_日付ID: " + dateTimeStr + "\n" +
-                "対象作物: " + selectedPlant + "\n" +
-                "区画(Cell): " + cellIndex + "\n" +
-                "判定結果(異常/病気/状態): " + label + "\n" +
-                "確信度(Confidence): " + String.format(Locale.getDefault(), "%.2f%%", confidence) + "\n" +
-                "緑色比率: " + String.format(Locale.getDefault(), "%.3f", greenRatio) + "\n" +
-                "関連画像ファイル: " + (imageFileName != null ? imageFileName : "なし") + "\n" +
-                "==================================\n";
-
-        try {
-            File txtFile = new File(getApplicationContext().getFilesDir(), textFileName);
-            FileOutputStream fos = new FileOutputStream(txtFile);
-            fos.write(content.getBytes(StandardCharsets.UTF_8));
-            fos.flush();
-            fos.close();
-
-            uploadFileToS3(txtFile, "public/captures/" + textFileName);
-        } catch (IOException e) {
-            Log.e("AmplifyGen2", "結果テキストファイルの生成失敗", e);
-        }
-    }
-
-    // ファイルを指定してS3にアップロードする共通関数
-    private void uploadFileToS3(File file, String s3Key) {
-        if (file == null || !file.exists()) {
-            Log.e("AmplifyGen2", "アップロード失敗: ファイルが存在しません");
-            return;
-        }
-
-        Log.i("AmplifyGen2", "ファイルアップロード開始: " + s3Key);
-
-        Amplify.Storage.uploadFile(
-                s3Key,
-                file,
-                result -> Log.i("AmplifyGen2", "S3アップロード成功！キー: " + result.getKey()),
-                error -> Log.e("AmplifyGen2", "S3アップロード失敗", error)
-        );
-    }
-
-    // カメラで撮影したBitmap画像などをS3にアップロードする関数
-    private void uploadCameraImageToS3(Bitmap bitmap) {
-        if (bitmap == null) {
-            Log.e("AmplifyGen2", "アップロード失敗: Bitmapがnullです");
-            return;
-        }
-
-        try {
-            String dateTimeStr = new SimpleDateFormat("yyyy_MM_dd_HHmmss", Locale.getDefault()).format(new Date());
-            File imageFile = new File(getApplicationContext().getFilesDir(), dateTimeStr + ".jpg");
-            FileOutputStream fos = new FileOutputStream(imageFile);
-
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, fos);
-            fos.flush();
-            fos.close();
-
-            uploadFileToS3(imageFile, "public/captures/" + dateTimeStr + ".jpg");
-
-        } catch (IOException e) {
-            Log.e("AmplifyGen2", "一時ファイルの作成に失敗しました", e);
-        }
-    }
-
-
 
     private void finishWork() {
-        saveData();
-        Toast.makeText(this, "保存して戻ります", Toast.LENGTH_SHORT).show();
-        startActivity(new Intent(this, com.example.cameraapp.MapActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
-        finish();
+        // 保存待ちのフレームを保存し終えてから記録をディスクに保存して戻る
+        stopAbnormalRecording(() -> {
+            saveData();
+            Toast.makeText(this, "保存して戻ります", Toast.LENGTH_SHORT).show();
+            startActivity(new Intent(this, com.example.cameraapp.MapActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
+            finish();
+        });
     }
 
     private void saveData() {
@@ -416,6 +481,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void goToNextCell() {
+        // 区画が変わる場合は異常記録を停止し、保存待ちのフレームを保存する
+        stopAbnormalRecording();
         if (currentCellIndex < totalCells) {
             currentCellIndex++;
             Toast.makeText(this, "区画: " + currentCellIndex, Toast.LENGTH_SHORT).show();

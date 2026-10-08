@@ -69,41 +69,53 @@ public class InferencePipeline {
      * @param bitmap 処理対象の画像
      * @param cellIndex セル番号
      * @param shouldSaveImage 条件(時間間隔など)が満たされている場合に保存を試みるか
+     * @param skipHealthy true の場合、判定結果が正常(healthy)のフレームは保存しない
      */
-    public Result process(Bitmap bitmap, int cellIndex, boolean shouldSaveImage) {
+    public Result process(Bitmap bitmap, int cellIndex, boolean shouldSaveImage, boolean skipHealthy) {
         float greenRatio = calculateGreenRatioFast(bitmap);
-        
+
         String label;
         float confidence;
         String imagePath = null;
 
-        // 緑色の割合が閾値未満の場合、判定をスキップし、ラベルを "Low Green"、スコアを 0 に固定
-        if (greenRatio < config.getGreenThreshold()) {
-            label = "Low Green";
-            confidence = 0.0f;
-        } else {
-            // 閾値を超えている場合のみ AI による分類を実行
+        boolean enoughGreen = greenRatio >= config.getGreenThreshold();
+        if (enoughGreen) {
+            // 閾値以上の場合のみ、毎フレーム AI による分類を実行
             ClassificationResult classResult = classifier.classify(bitmap);
             label = classResult.getLabel();
             confidence = classResult.getConfidence();
+        } else {
+            // 緑色の割合が閾値未満の場合、判定をスキップし、ラベルを "Low Green"、スコアを 0 に固定
+            label = "Low Green";
+            confidence = 0.0f;
+        }
 
-            // 保存条件を満たす場合のみ保存
-            if (shouldSaveImage && context != null) {
-                int bracket = (int)(confidence / 10);
-                if (bracket > 9) bracket = 9;
-                if (bracket < 0) bracket = 0;
-                String scoreBracket = String.format(Locale.getDefault(), "%d-%d%%", bracket * 10, (bracket + 1) * 10);
-
-                String dateStr = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
-                String nestedPath = "Cell_" + cellIndex + "/" + label + "/" + scoreBracket + "/" + dateStr;
-                imagePath = saveToNestedFolder(bitmap, nestedPath, "img_" + System.nanoTime() + ".jpg");
-            }
+        // 緑不足のフレームは保存しない。正常フレームは skipHealthy の場合保存しない
+        boolean healthy = "healthy".equalsIgnoreCase(label);
+        if (shouldSaveImage && enoughGreen && !(skipHealthy && healthy) && context != null) {
+            imagePath = saveClassified(bitmap, cellIndex, label, confidence);
         }
 
         Log.d("Pipeline", String.format(Locale.getDefault(), "Ratio: %.3f, Threshold: %.2f, Label: %s, Score: %.1f", 
                 greenRatio, config.getGreenThreshold(), label, confidence));
         
         return new Result(label, confidence, imagePath, greenRatio);
+    }
+
+    public Result process(Bitmap bitmap, int cellIndex, boolean shouldSaveImage) {
+        return process(bitmap, cellIndex, shouldSaveImage, false);
+    }
+
+    /** 判別結果（ラベル・スコア帯・日付）のフォルダに画像を保存する */
+    public String saveClassified(Bitmap bitmap, int cellIndex, String label, float confidence) {
+        int bracket = (int)(confidence / 10);
+        if (bracket > 9) bracket = 9;
+        if (bracket < 0) bracket = 0;
+        String scoreBracket = String.format(Locale.getDefault(), "%d-%d%%", bracket * 10, (bracket + 1) * 10);
+
+        String dateStr = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+        String nestedPath = "Cell_" + cellIndex + "/" + label + "/" + scoreBracket + "/" + dateStr;
+        return saveToNestedFolder(bitmap, nestedPath, "img_" + System.nanoTime() + ".jpg");
     }
 
     public String saveToNestedFolder(Bitmap bmp, String subDir, String fileName) {

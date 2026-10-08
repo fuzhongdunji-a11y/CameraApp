@@ -91,6 +91,7 @@ public class ResultRepository {
                                 (float) obj.getDouble("accuracy")
                         );
                         record.setConfidence((float) obj.optDouble("confidence", 0.0));
+                        record.setUploaded(obj.optBoolean("uploaded", false));
                         list.add(record);
                     }
                     results.put(cellId, list);
@@ -116,6 +117,7 @@ public class ResultRepository {
                     obj.put("longitude", record.getLongitude());
                     obj.put("accuracy", record.getAccuracy());
                     obj.put("confidence", record.getConfidence()); // ここで保存
+                    obj.put("uploaded", record.isUploaded());
                     array.put(obj);
                 }
                 editor.putString(KEY_RECORDS_PREFIX + entry.getKey(), array.toString());
@@ -134,9 +136,21 @@ public class ResultRepository {
             results.put(record.getIndex(), list);
         }
         list.add(record);
+        updateStatus(record);
+    }
 
+    /** 記録を削除し、その区画のステータスを残りの記録から再計算する */
+    public void remove(CellResult record) {
+        List<CellResult> list = results.get(record.getIndex());
+        if (list == null || !list.remove(record)) return;
+
+        map.remove(record.getIndex());
+        for (CellResult r : list) updateStatus(r);
+    }
+
+    private void updateStatus(CellResult record) {
         String r = record.getResult().toLowerCase();
-        
+
         // 緑不足の場合はステータスを健康(OK)に更新しない
         if (r.contains("low green")) {
             return;
