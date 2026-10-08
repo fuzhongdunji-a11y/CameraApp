@@ -29,6 +29,7 @@
         <activity android:name=".OfflineImportActivity" android:exported="false"/>
         <activity android:name=".ui.DetailActivity" android:exported="false"/>
         <activity android:name=".ui.AbnormalListActivity" android:exported="false"/>
+        <activity android:name=".ui.BackNumberActivity" android:exported="false"/>
 
     </application>
 </manifest>

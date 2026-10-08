@@ -56,8 +56,8 @@ public class CloudUploader {
     /**
      * 保存した写真と判定結果テキストを S3 にアップロードする。
      * 前回までにアップロード済みの写真は除外する。
-     * 保存先: public/captures/{日付}/Cell{区画}-{結果}.jpg / .txt
-     * 同じ区画・結果が複数ある場合は _2, _3 ... を付ける。
+     * 保存先: public/captures/{アップロード日時}/Cell{区画}-{結果}-{撮影日時 yyyyMMdd_HHmmss}.jpg / .txt
+     * 同じ名前が複数ある場合は _2, _3 ... を付ける。
      * 写真とテキストの両方が成功した記録のみアップロード済みにする（件数は写真単位）。
      */
     public static void uploadSavedResults(Context context, List<CellResult> records, Callback callback) {
@@ -81,7 +81,9 @@ public class CloudUploader {
         Map<String, Integer> nameCount = new HashMap<>();
 
         for (CellResult r : targets) {
-            String baseName = "Cell" + r.getIndex() + "-" + sanitize(r.getResult());
+            // 撮影日時をファイル名に含め、バックナンバー画面で撮影日ごとに集計できるようにする
+            String shotAt = new SimpleDateFormat(CloudBrowser.SHOT_AT_FORMAT, Locale.getDefault()).format(new Date(r.getTimestamp()));
+            String baseName = "Cell" + r.getIndex() + "-" + sanitize(r.getResult()) + "-" + shotAt;
             int n = nameCount.getOrDefault(baseName, 0) + 1;
             nameCount.put(baseName, n);
             if (n > 1) baseName += "_" + n;

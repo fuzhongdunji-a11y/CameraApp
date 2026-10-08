@@ -33,9 +33,20 @@
         android:layout_height="wrap_content"
         android:text="クラウドに保存"
         android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp"
+        android:layout_marginEnd="4dp"
         app:layout_constraintBottom_toTopOf="@id/btnFieldSettings"
         app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/btnBackNumber"/>
+
+    <Button
+        android:id="@+id/btnBackNumber"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="バックナンバー"
+        android:layout_marginStart="4dp"
+        android:layout_marginEnd="16dp"
+        app:layout_constraintBottom_toTopOf="@id/btnFieldSettings"
+        app:layout_constraintStart_toEndOf="@id/btnCloudUpload"
         app:layout_constraintEnd_toEndOf="parent"/>
 
     <Button

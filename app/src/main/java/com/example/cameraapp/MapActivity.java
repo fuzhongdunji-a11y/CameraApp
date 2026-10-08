@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.example.cameraapp.cloud.CloudUploader;
 import com.example.cameraapp.data.CellResult;
 import com.example.cameraapp.data.ResultRepository;
+import com.example.cameraapp.ui.BackNumberActivity;
 import com.example.cameraapp.ui.DetailActivity;
 
 import java.util.ArrayList;
@@ -57,6 +58,12 @@ public class MapActivity extends AppCompatActivity {
         btnCloudUpload = findViewById(R.id.btnCloudUpload);
         if (btnCloudUpload != null) {
             btnCloudUpload.setOnClickListener(v -> uploadToCloud());
+        }
+
+        // クラウドにアップロードしたこれまでの結果を見る
+        Button btnBackNumber = findViewById(R.id.btnBackNumber);
+        if (btnBackNumber != null) {
+            btnBackNumber.setOnClickListener(v -> startActivity(new Intent(this, BackNumberActivity.class)));
         }
 
         refreshData();

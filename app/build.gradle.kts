@@ -45,6 +45,9 @@ android {
 }
 
 dependencies {
+
+    implementation("com.github.bumptech.glide:glide:4.16.0")
+
     // Core Library Desugaring の本体を追加
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
