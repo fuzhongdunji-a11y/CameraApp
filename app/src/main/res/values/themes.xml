@@ -1,0 +1,4 @@
+<resources>
+    <style name="Theme.CameraApp" parent="Theme.AppCompat.Light.DarkActionBar">
+    </style>
+</resources>

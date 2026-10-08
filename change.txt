@@ -1,0 +1,57 @@
+【変更内容まとめ】緑色判定の厳格化および低比率時の動作修正
+
+1. InferencePipeline.java の変更
+■ 閾値の変更と推論のスキップ
+緑色の割合が閾値（25%）未満の場合、AI推論を実行せずにラベルを "Low Green"、スコアを 0.0% に固定するようにしました。
+
+```java
+public Result process(Bitmap bitmap, int cellIndex, boolean shouldSaveImage) {
+    float greenRatio = calculateGreenRatioFast(bitmap);
+    String label;
+    float confidence;
+
+    if (greenRatio < config.getGreenThreshold()) {
+        label = "Low Green";
+        confidence = 0.0f; // 判定不足時はスコアを0に固定
+    } else {
+        ClassificationResult classResult = classifier.classify(bitmap);
+        label = classResult.getLabel();
+        confidence = classResult.getConfidence();
+        // ... 保存処理 ...
+    }
+    return new Result(label, confidence, imagePath, greenRatio);
+}
+```
+
+■ 緑色判定ロジックの厳格化
+土の茶色やグレーの背景を誤検知しないよう、HSV表色系とExG指標を組み合わせた判定に変更しました。
+- Hue(色相): 80-160 (純粋な緑)
+- Saturation(彩度): 0.50以上 (鮮やかな緑のみ)
+- G > R * 1.25, G > B * 1.15 (緑成分の優位性)
+
+2. PlantClassifier.java の変更
+■ 信頼度（スコア）の調整
+判定が常に99%以上に張り付くのを防ぐため、温度スケーリング（TEMPERATURE）を 2.5f から 5.0f に引き上げ、数値をマイルドにしました。
+
+```java
+private static final float TEMPERATURE = 5.0f;
+```
+
+3. ResultRepository.java の変更
+■ ステータス更新のフィルタリング
+"Low Green"（緑不足）の判定結果を受け取った際、その区画のステータスを「健康(OK)」に更新しないように制限しました。
+
+```java
+public void add(CellResult record) {
+    // ...
+    if (record.getResult().toLowerCase().contains("low green")) {
+        return; // 緑不足時はマップのステータス(OK/NG)を更新しない
+    }
+    // ...
+}
+```
+
+4. 閾値の設定変更
+プロジェクト全体で緑色の判定閾値を 60% から 25% に変更しました。
+- InferencePipeline.java: 閾値デフォルト値を 0.25f に変更。
+- MainActivity.java: UI表示上の閾値表記を 0.25 に更新。

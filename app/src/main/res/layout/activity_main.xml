@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F5F5F5">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+
+        <androidx.camera.view.PreviewView
+            android:id="@+id/previewView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#000000" />
+
+        <TextView
+            android:id="@+id/resultTextView"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="判定結果: 待機中"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:padding="8dp"/>
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="▼ 検出箇所切り抜き"/>
+        <ImageView
+            android:id="@+id/croppedImageView"
+            android:layout_width="150dp"
+            android:layout_height="150dp"
+            android:layout_gravity="center"
+            android:background="#CCCCCC"
+            android:scaleType="fitCenter"/>
+
+
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="▼ 選択画像全体" android:layout_marginTop="10dp"/>
+        <ImageView
+            android:id="@+id/imageView"
+            android:layout_width="match_parent"
+            android:layout_height="200dp"
+            android:background="#EEEEEE"
+            android:scaleType="fitCenter"/>
+
+        <GridLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:columnCount="2"
+            android:layout_marginTop="10dp">
+
+            <Button
+                android:id="@+id/btnNextCell"
+                android:text="次の区画へ"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="16dp"/>
+
+
+            <Button android:id="@+id/btnLoadImage" android:text="画像選択" android:layout_columnWeight="1"/>
+            <Button android:id="@+id/btnDetect" android:text="検出実行" android:layout_columnWeight="1"/>
+            <Button android:id="@+id/btnAbnormal" android:text="異常あり" android:backgroundTint="#FF5252" android:layout_columnWeight="1"/>
+            <Button android:id="@+id/btnReport" android:text="報告/戻る" android:backgroundTint="#4CAF50" android:layout_columnWeight="1"/>
+            <Button android:id="@+id/btnFinish" android:text="判定履歴" android:layout_columnWeight="1"/>
+            <Button android:id="@+id/btnVoice" android:text="音声開始" android:layout_columnWeight="1"/>
+        </GridLayout>
+
+        <com.example.cameraapp.yolo.BoundingBoxView
+            android:id="@+id/boxView"
+            android:layout_width="match_parent"
+            android:layout_height="1dp" />
+
+    </LinearLayout>
+</ScrollView>

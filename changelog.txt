@@ -1,0 +1,67 @@
+    【CameraApp 変更履歴】
+※ 新しい変更は末尾に追記していきます。
+
+========================================
+2026-10-08  重複ファイルの整理
+========================================
+
+■ AbnormalListActivity の統一
+- ui/AbnormalListActivity.java（機能が多い方）を
+  com/example/cameraapp/ui/AbnormalListActivity.java へ移動し、package を変更。
+- 元々 com.example.cameraapp.ui にあった簡易版（未コミット）は削除。
+- MainActivity の import を com.example.cameraapp.ui.AbnormalListActivity に変更。
+- AndroidManifest.xml に未登録だったため追加（起動時クラッシュの防止）。
+    <activity android:name=".ui.AbnormalListActivity" android:exported="false"/>
+
+■ WorkMode の統一
+- com/example/cameraapp/WorkMode.java を削除。
+  util/WorkMode.java を残す（内容は同一、現状どこからも未使用）。
+
+■ 未使用・重複クラスの削除
+- ui/AbnormalRepository.java
+    model.AbnormalRepository へ委譲するだけのラッパーで未使用。
+- AbnormalPoint.java / AbnormalPointRepository.java
+    model.AbnormalRepository と役割が重複しており未使用。
+- com/example/cameraapp/model（0バイトの空ファイル）
+
+========================================
+2026-10-08  パッケージを com.example.cameraapp 配下に統一
+========================================
+
+■ ファイル移動（git mv）
+- model/AbnormalRecord.java, AbnormalRepository.java
+    → com.example.cameraapp.model
+- yolo/YoloDetector.java, BoundingBoxView.java, BoxData.java
+    → com.example.cameraapp.yolo
+- ui/AbnormalAdapter.java
+    → com.example.cameraapp.ui
+
+■ 参照の修正
+- 各ファイルの package 宣言を変更。
+- import model.* / import yolo.* を com.example.cameraapp.* に変更
+  （MainActivity, MapActivity, OfflineImportActivity, CropUtils, InferencePipeline）。
+- res/layout/activity_main.xml
+    <yolo.BoundingBoxView> → <com.example.cameraapp.yolo.BoundingBoxView>
+
+■ 未確認事項
+- Android Studio 同梱 JDK (jbr) が不完全なため Gradle ビルドは未実施。
+  grep により旧パッケージへの参照が残っていないことのみ確認済み。
+- 上記変更はまだコミットしていない。
+
+========================================
+2026-10-08  CameraApp3 単体の git リポジトリを作成
+========================================
+
+■ 背景
+- これまで git のルートが C:\Users\fuzho\Downloads 全体になっており、
+  別プロジェクトや個人ファイルと混在していたため、CameraApp3 で git init。
+  （Downloads 側のリポジトリには変更を加えていない）
+
+■ .gitignore に追加
+- .kotlin            Kotlin コンパイラのエラーログ
+- /exportToHTML      IDE の HTML エクスポート
+- /opencv            ビルドに含まれていない OpenCV SDK（約146MB）
+
+■ 備考
+- assets/*.tflite（合計約390MB、各 43MB 前後）はアプリに必要なためコミット対象。
+  GitHub に push する場合は Git LFS の利用を検討。

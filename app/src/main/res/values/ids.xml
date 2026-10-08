@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="btnAbnormal" type="id" />
+    <item name="btn_report" type="id" />
+    <item name="croppedImageView" type="id" />
+    <item name="btnFinish" type="id" />
+    <item name="btnReport" type="id" />
+    <item name="cellText" type="id" />
+    <item name="cardView" type="id" />
+    <item name="btnBack" type="id" />
+    <item name="txtCellTitle" type="id" />
+    <item name="txtPlantType" type="id" />
+    <item name="txtResult" type="id" />
+    <item name="imgStatusIcon" type="id" />
+    <item name="txtPos" type="id" />
+    <item name="btnPhone" type="id" />
+    <item name="txtProgress" type="id" />
+    <item name="progressBar" type="id" />
+    <item name="recyclerView" type="id" />
+</resources>

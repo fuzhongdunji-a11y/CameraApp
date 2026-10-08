@@ -1,0 +1,54 @@
+【CameraApp 変更内容まとめ】
+
+1. 圃場マップ詳細画面の高度化 (DetailActivity.java)
+- セルタップ後の画面を「日付ごとのグループ表示」に変更。
+- 各日付行に「平均スコア」と「代表写真」を表示。
+- 日付タップでその日の全写真リストを表示するドリルダウン形式を実装。
+
+[コード例: 日付グループ化ロジック]
+Map<String, DateSummary> groupedMap = new LinkedHashMap<>();
+SimpleDateFormat sdf = new SimpleDateFormat("yyyy/MM/dd", Locale.getDefault());
+for (CellResult record : records) {
+    String dateStr = sdf.format(new Date(record.getTimestamp()));
+    DateSummary summary = groupedMap.get(dateStr);
+    if (summary == null) {
+        summary = new DateSummary(dateStr);
+        groupedMap.put(dateStr, summary);
+    }
+    summary.averageConfidence += record.getConfidence();
+    summary.count++;
+}
+
+2. 自動撮影システムの最適化 (MainActivity.java / InferencePipeline.java)
+- 緑色判定の閾値を 40% (0.40) に引き上げ、植物が主役の写真のみを保存。
+- 自動保存間隔を 0.5秒 (500ms) に設定。
+
+[コード例: 0.5秒間隔の自動保存]
+private static final long AUTO_SAVE_INTERVAL = 500;
+// processIncomingBitmap内
+if (!manual && result.getSavedImagePath() != null) {
+    long now = System.currentTimeMillis();
+    if (now - lastAutoSaveTime > AUTO_SAVE_INTERVAL) {
+        shouldSave = true;
+        lastAutoSaveTime = now;
+    }
+}
+
+[コード例: 緑色閾値の設定 (InferencePipeline)]
+public static class Config {
+    public Config() { this(0.40f); } // 40% に設定
+}
+
+3. デバッグ情報のリアルタイム表示 (MainActivity.java)
+- 撮影画面に現在の「緑色比率」を表示。
+
+[コード例: UI更新]
+String info = String.format(Locale.getDefault(),
+        "%s\n判定: %s (%.1f%%)\n緑比率: %.3f (しきい値: 0.40)",
+        status, result.getLabel(), result.getConfidence(), result.getGreenRatio());
+resultTextView.setText(info);
+
+4. 技術的な修正
+- YoloDetector のインポートエラーを解消 (import yolo.YoloDetector;)。
+- アプリ停止時 (onPause) のデータ強制保存を実装。
+- ナノ秒単位のファイル名採用 (img_" + System.nanoTime() + ".jpg) による高速連写対応。
