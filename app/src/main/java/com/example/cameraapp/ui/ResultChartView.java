@@ -16,8 +16,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 日付ごとの件数を棒グラフで描画するビュー（縦軸: 件数、横軸: 日付）。
- * 棒をタップするとその日付の件数を表示する。
+ * 日付ごとの件数を折れ線グラフで描画するビュー（縦軸: 件数、横軸: 日付）。
+ * グラフをタップ（またはなぞる）と、いちばん近い日付の件数を表示する。
  */
 public class ResultChartView extends View {
 
@@ -25,19 +25,24 @@ public class ResultChartView extends View {
     private static final int TEXT_SECONDARY = Color.parseColor("#52514E");
     private static final int GRID = Color.parseColor("#E4E3DF");
     private static final int AXIS = Color.parseColor("#B5B4AE");
+    // 画面の背景色（点の縁取りに使い、線と点を見分けやすくする）
+    private static final int SURFACE = Color.parseColor("#FCFCFB");
 
     private final List<String> labels = new ArrayList<>();
     private final List<Integer> values = new ArrayList<>();
-    private int barColor = Color.parseColor("#2A78D6");
+    private int lineColor = Color.parseColor("#2A78D6");
     private String emptyText = "データがありません";
     private int selected = -1;
 
-    private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint ringPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint axisPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint crosshairPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint tipPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Path barPath = new Path();
+    private final Path linePath = new Path();
     private final RectF rect = new RectF();
     private final float dp;
 
@@ -51,12 +56,19 @@ public class ResultChartView extends View {
     public ResultChartView(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
         dp = getResources().getDisplayMetrics().density;
+        linePaint.setStyle(Paint.Style.STROKE);
+        linePaint.setStrokeWidth(2 * dp);
+        linePaint.setStrokeJoin(Paint.Join.ROUND);
+        linePaint.setStrokeCap(Paint.Cap.ROUND);
+        ringPaint.setColor(SURFACE);
         gridPaint.setColor(GRID);
         gridPaint.setStrokeWidth(1 * dp);
         axisPaint.setColor(AXIS);
         axisPaint.setStrokeWidth(1 * dp);
+        crosshairPaint.setColor(AXIS);
+        crosshairPaint.setStrokeWidth(1 * dp);
         textPaint.setTextSize(11 * dp * getResources().getConfiguration().fontScale);
-        tipPaint.setColor(Color.WHITE);
+        tipPaint.setColor(TEXT_PRIMARY);
     }
 
     /** 日付ラベルと件数を設定する（同じ長さ） */
@@ -65,7 +77,7 @@ public class ResultChartView extends View {
         this.labels.addAll(labels);
         this.values.clear();
         this.values.addAll(values);
-        this.barColor = color;
+        this.lineColor = color;
         this.selected = -1;
         invalidate();
     }
@@ -110,23 +122,43 @@ public class ResultChartView extends View {
             if (v > 0) canvas.drawLine(plotLeft, y, plotRight, y, gridPaint);
             canvas.drawText(String.valueOf(v), plotLeft - 6 * dp, y + textH / 3, textPaint);
         }
+        canvas.drawLine(plotLeft, plotBottom, plotRight, plotBottom, axisPaint);
 
-        // 棒（隣の棒との間に 2dp 以上の隙間、上端のみ角丸）
+        // 各日付の点の位置（日付ごとに等間隔の枠の中央）
         int n = values.size();
         slotWidth = (plotRight - plotLeft) / n;
-        float gap = Math.max(2 * dp, slotWidth * 0.3f);
-        float barW = Math.min(Math.max(slotWidth - gap, 1), 40 * dp);
-        float radius = Math.min(4 * dp, barW / 2);
-        barPaint.setColor(barColor);
+        float[] xs = new float[n];
+        float[] ys = new float[n];
         for (int i = 0; i < n; i++) {
-            int v = values.get(i);
-            if (v <= 0) continue;
-            float cx = plotLeft + slotWidth * (i + 0.5f);
-            float barTop = plotBottom - plotH * v / top;
-            barPaint.setAlpha(selected < 0 || selected == i ? 255 : 110);
-            drawTopRoundedBar(canvas, cx - barW / 2, barTop, cx + barW / 2, plotBottom, radius);
+            xs[i] = plotLeft + slotWidth * (i + 0.5f);
+            ys[i] = plotBottom - plotH * values.get(i) / top;
         }
-        canvas.drawLine(plotLeft, plotBottom, plotRight, plotBottom, axisPaint);
+
+        // 選択した日付の縦線
+        if (selected >= 0 && selected < n) {
+            canvas.drawLine(xs[selected], plotTop, xs[selected], plotBottom, crosshairPaint);
+        }
+
+        // 折れ線（件数 0 の日も 0 として線でつなぐ）
+        linePaint.setColor(lineColor);
+        if (n > 1) {
+            linePath.reset();
+            linePath.moveTo(xs[0], ys[0]);
+            for (int i = 1; i < n; i++) linePath.lineTo(xs[i], ys[i]);
+            canvas.drawPath(linePath, linePaint);
+        }
+
+        // 点（日付が多く間隔が狭い場合は、選択した点と1日だけの場合のみ描く）
+        dotPaint.setColor(lineColor);
+        float radius = 4 * dp;
+        float ring = 2 * dp;
+        boolean showDots = slotWidth >= 12 * dp || n == 1;
+        for (int i = 0; i < n; i++) {
+            if (!showDots && i != selected) continue;
+            float r = i == selected ? radius + 1.5f * dp : radius;
+            canvas.drawCircle(xs[i], ys[i], r + ring, ringPaint);
+            canvas.drawCircle(xs[i], ys[i], r, dotPaint);
+        }
 
         // 日付ラベル（重ならないように間引く。最後の日付は常に表示）
         textPaint.setColor(TEXT_SECONDARY);
@@ -135,34 +167,19 @@ public class ResultChartView extends View {
         int every = Math.max(1, (int) Math.ceil(labelW / slotWidth));
         float labelY = plotBottom + textH + 4 * dp;
         for (int i = n - 1; i >= 0; i -= every) {
-            canvas.drawText(labels.get(i), plotLeft + slotWidth * (i + 0.5f), labelY, textPaint);
+            canvas.drawText(labels.get(i), xs[i], labelY, textPaint);
         }
 
-        // タップした棒の件数
+        // 選択した日付の件数
         if (selected >= 0 && selected < n) {
             String tip = labels.get(selected) + "  " + values.get(selected) + "件";
-            float cx = plotLeft + slotWidth * (selected + 0.5f);
             float tw = textPaint.measureText(tip) + 12 * dp;
-            float left = Math.max(plotLeft, Math.min(cx - tw / 2, plotRight - tw));
+            float left = Math.max(plotLeft, Math.min(xs[selected] - tw / 2, plotRight - tw));
             rect.set(left, getPaddingTop(), left + tw, getPaddingTop() + textH + 8 * dp);
-            tipPaint.setColor(TEXT_PRIMARY);
             canvas.drawRoundRect(rect, 4 * dp, 4 * dp, tipPaint);
             textPaint.setColor(Color.WHITE);
             canvas.drawText(tip, rect.centerX(), rect.bottom - 4 * dp - textH * 0.15f, textPaint);
         }
-    }
-
-    private void drawTopRoundedBar(Canvas canvas, float l, float t, float r, float b, float radius) {
-        float rad = Math.min(radius, b - t);
-        barPath.reset();
-        barPath.moveTo(l, b);
-        barPath.lineTo(l, t + rad);
-        barPath.quadTo(l, t, l + rad, t);
-        barPath.lineTo(r - rad, t);
-        barPath.quadTo(r, t, r, t + rad);
-        barPath.lineTo(r, b);
-        barPath.close();
-        canvas.drawPath(barPath, barPaint);
     }
 
     /** 目盛りが5本程度になるように 1, 2, 5, 10, 20, 50... から間隔を選ぶ */
@@ -178,23 +195,33 @@ public class ResultChartView extends View {
         }
     }
 
+    /** x 座標にいちばん近い日付の番号（グラフの範囲外なら -1） */
+    private int indexAt(float x) {
+        if (x < plotLeft - slotWidth / 2 || x > plotRight + slotWidth / 2) return -1;
+        int i = (int) ((x - plotLeft) / slotWidth);
+        return Math.max(0, Math.min(values.size() - 1, i));
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (values.isEmpty() || slotWidth <= 0) return false;
-        if (event.getAction() == MotionEvent.ACTION_DOWN) return true;
-        if (event.getAction() == MotionEvent.ACTION_UP) {
-            float x = event.getX();
-            int i = (int) ((x - plotLeft) / slotWidth);
-            if (x < plotLeft || x > plotRight || i < 0 || i >= values.size() || i == selected) {
-                selected = -1;
-            } else {
-                selected = i;
-            }
-            invalidate();
-            performClick();
-            return true;
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+            case MotionEvent.ACTION_MOVE:
+                // なぞっている間は親のスクロールに取られないようにする
+                getParent().requestDisallowInterceptTouchEvent(true);
+                int i = indexAt(event.getX());
+                if (i != selected) {
+                    selected = i;
+                    invalidate();
+                }
+                return true;
+            case MotionEvent.ACTION_UP:
+                performClick();
+                return true;
+            default:
+                return super.onTouchEvent(event);
         }
-        return super.onTouchEvent(event);
     }
 
     @Override

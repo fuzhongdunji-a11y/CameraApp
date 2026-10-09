@@ -1,22 +1,15 @@
 package com.example.cameraapp.ui;
 
 import android.graphics.Color;
+import android.content.Intent;
 import android.os.Bundle;
-import android.view.LayoutInflater;
-import android.view.View;
-import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.ImageView;
 import android.widget.RadioGroup;
 import android.widget.TextView;
+import android.widget.Toast;
 
-import androidx.annotation.NonNull;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
 
-import com.bumptech.glide.Glide;
 import com.example.cameraapp.R;
 import com.example.cameraapp.cloud.CloudBrowser;
 import com.example.cameraapp.cloud.CloudUploader;
@@ -25,6 +18,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -33,8 +27,8 @@ import java.util.Map;
 
 /**
  * バックナンバー画面。
- * クラウド(S3)にアップロードしたこれまでの写真と判定結果を、アップロード日時ごとに一覧表示する。
- * 項目を押すと写真と判定結果テキストを表示する。
+ * クラウド(S3)にアップロードしたこれまでの判定結果を、上半分に項目ごとの撮影日別件数グラフ、
+ * 下半分に撮影日のカレンダーで表示する。カレンダーの日付を押すとその日のマップを開く。
  */
 public class BackNumberActivity extends AppCompatActivity {
 
@@ -56,9 +50,9 @@ public class BackNumberActivity extends AppCompatActivity {
     // 再読み込みのたびに増やし、前回の読み込みの結果を破棄するために使う
     private int loadGeneration = 0;
     private Button btnReload;
-    private final BackNumberAdapter adapter = new BackNumberAdapter();
-    // S3 の写真 URL（一時的な署名付き URL）のキャッシュ。UIスレッドでのみ操作
-    private final Map<String, String> urlCache = new HashMap<>();
+    private MonthCalendarView calendarView;
+    // カレンダーに最新の撮影日の月を表示済みか
+    private boolean calendarMonthChosen = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,9 +61,8 @@ public class BackNumberActivity extends AppCompatActivity {
 
         statusText = findViewById(R.id.statusText);
         btnReload = findViewById(R.id.btnReload);
-        RecyclerView recyclerView = findViewById(R.id.recyclerView);
-        recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        recyclerView.setAdapter(adapter);
+        calendarView = findViewById(R.id.calendarView);
+        calendarView.setOnDateClickListener(this::openDay);
 
         chartTitle = findViewById(R.id.chartTitle);
         chartView = findViewById(R.id.chartView);
@@ -102,11 +95,10 @@ public class BackNumberActivity extends AppCompatActivity {
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
                     btnReload.setEnabled(true);
-                    urlCache.clear();
                     BackNumberActivity.this.captures = captures;
-                    adapter.setCaptures(captures);
                     chartView.setEmptyText("データがありません");
                     updateChart();
+                    updateCalendar();
                     statusText.setText(captures.isEmpty()
                             ? "アップロードした写真はまだありません"
                             : captures.size() + "件の結果");
@@ -119,7 +111,7 @@ public class BackNumberActivity extends AppCompatActivity {
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
                     btnReload.setEnabled(true);
-                    statusText.setText("読み込みに失敗しました: " + e.getMessage());
+                    statusText.setText("読み込みに失敗しました\n" + CloudBrowser.describe(e));
                 });
             }
         });
@@ -168,12 +160,12 @@ public class BackNumberActivity extends AppCompatActivity {
                 c.shotAt = shotAt;
                 done[0]++;
                 updateChart();
+                updateCalendar();
                 if (done[0] < queue.size()) {
                     statusText.setText(list.size() + "件の結果（撮影日を取得中 " + done[0] + "/" + queue.size() + "）");
                     resolveNext(generation, list, queue, next, done);
                 } else {
                     statusText.setText(list.size() + "件の結果");
-                    adapter.notifyDataSetChanged();
                 }
             }
         });
@@ -239,155 +231,48 @@ public class BackNumberActivity extends AppCompatActivity {
         chartView.setData(labels, values, CAT_COLORS[selectedCategory]);
     }
 
-    /** S3 の写真を ImageView に表示する。表示までに別の項目へ再利用された場合は表示しない */
-    private void loadImage(ImageView imageView, String key) {
-        imageView.setTag(key);
-        imageView.setImageDrawable(null);
-        String cached = urlCache.get(key);
-        if (cached != null) {
-            Glide.with(this).load(cached).into(imageView);
+    /** 撮影日ごとの件数をカレンダーに表示する（全項目の合計。病気・異常ありを含む日は赤） */
+    private void updateCalendar() {
+        SimpleDateFormat key = new SimpleDateFormat("yyyy_MM_dd", Locale.getDefault());
+        Map<String, MonthCalendarView.DayMark> marks = new HashMap<>();
+        Date latest = null;
+        for (CloudBrowser.Capture c : captures) {
+            if (c.shotAt == null) continue;
+            String day = key.format(c.shotAt);
+            MonthCalendarView.DayMark mark = marks.get(day);
+            if (mark == null) {
+                mark = new MonthCalendarView.DayMark();
+                marks.put(day, mark);
+            }
+            mark.count++;
+            if (categoryOf(c.result) != CAT_HEALTHY) mark.problem = true;
+            if (latest == null || c.shotAt.after(latest)) latest = c.shotAt;
+        }
+        calendarView.setMarks(marks);
+
+        // 最初に記録が見つかったときだけ、最新の撮影日の月を表示する（その後はユーザーの操作を優先）
+        if (!calendarMonthChosen && latest != null) {
+            calendarMonthChosen = true;
+            Calendar cal = Calendar.getInstance();
+            cal.setTime(latest);
+            calendarView.showMonth(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH));
+        }
+    }
+
+    /** 選んだ撮影日のマップを開く */
+    private void openDay(String day) {
+        SimpleDateFormat key = new SimpleDateFormat("yyyy_MM_dd", Locale.getDefault());
+        List<CloudBrowser.Capture> list = new ArrayList<>();
+        for (CloudBrowser.Capture c : captures) {
+            if (c.shotAt != null && key.format(c.shotAt).equals(day)) list.add(c);
+        }
+        if (list.isEmpty()) {
+            Toast.makeText(this, "この日の記録はありません", Toast.LENGTH_SHORT).show();
             return;
         }
-        CloudBrowser.getUrl(key, new CloudBrowser.Callback<String>() {
-            @Override
-            public void onSuccess(String url) {
-                runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) return;
-                    urlCache.put(key, url);
-                    if (key.equals(imageView.getTag())) Glide.with(BackNumberActivity.this).load(url).into(imageView);
-                });
-            }
-
-            @Override
-            public void onError(Exception e) {
-                // 写真なしのまま表示する
-            }
-        });
-    }
-
-    private void showDetail(CloudBrowser.Capture c) {
-        View view = LayoutInflater.from(this).inflate(R.layout.dialog_back_number, null);
-        ImageView imageView = view.findViewById(R.id.imageView);
-        TextView textView = view.findViewById(R.id.textView);
-
-        new AlertDialog.Builder(this)
-                .setTitle(cellLabel(c) + "  " + c.result)
-                .setView(view)
-                .setPositiveButton("閉じる", null)
-                .show();
-
-        loadImage(imageView, c.imageKey);
-        if (c.textKey == null) {
-            textView.setText("判定結果テキストがありません");
-            return;
-        }
-        textView.setText("判定結果を読み込み中...");
-        CloudBrowser.downloadText(this, c.textKey, new CloudBrowser.Callback<String>() {
-            @Override
-            public void onSuccess(String text) {
-                runOnUiThread(() -> textView.setText(text));
-            }
-
-            @Override
-            public void onError(Exception e) {
-                runOnUiThread(() -> textView.setText("判定結果の読み込みに失敗しました: " + e.getMessage()));
-            }
-        });
-    }
-
-    private static String cellLabel(CloudBrowser.Capture c) {
-        return c.cellIndex > 0 ? "区画 " + c.cellIndex : c.name;
-    }
-
-    /** フォルダ名（yyyy_MM_dd_HHmmss）を表示用の日時にする */
-    private static String folderLabel(String folder) {
-        try {
-            SimpleDateFormat in = new SimpleDateFormat("yyyy_MM_dd_HHmmss", Locale.getDefault());
-            SimpleDateFormat out = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault());
-            return out.format(in.parse(folder)) + " アップロード";
-        } catch (ParseException e) {
-            return folder;
-        }
-    }
-
-    /** アップロード日時の見出しと結果の項目を並べるアダプター */
-    private class BackNumberAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
-        private static final int TYPE_HEADER = 0;
-        private static final int TYPE_ITEM = 1;
-
-        // String（見出しのフォルダ名）または CloudBrowser.Capture
-        private final List<Object> rows = new ArrayList<>();
-
-        void setCaptures(List<CloudBrowser.Capture> captures) {
-            rows.clear();
-            String folder = null;
-            for (CloudBrowser.Capture c : captures) {
-                if (!c.folder.equals(folder)) {
-                    folder = c.folder;
-                    rows.add(folder);
-                }
-                rows.add(c);
-            }
-            notifyDataSetChanged();
-        }
-
-        @Override
-        public int getItemViewType(int position) {
-            return rows.get(position) instanceof String ? TYPE_HEADER : TYPE_ITEM;
-        }
-
-        @NonNull
-        @Override
-        public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            if (viewType == TYPE_HEADER) {
-                TextView tv = new TextView(parent.getContext());
-                tv.setLayoutParams(new RecyclerView.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-                int pad = (int) (8 * parent.getResources().getDisplayMetrics().density);
-                tv.setPadding(pad, pad * 2, pad, pad);
-                tv.setTextSize(15);
-                tv.setTextColor(Color.DKGRAY);
-                return new RecyclerView.ViewHolder(tv) {};
-            }
-            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_back_number, parent, false);
-            return new ItemHolder(v);
-        }
-
-        @Override
-        public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-            Object row = rows.get(position);
-            if (row instanceof String) {
-                ((TextView) holder.itemView).setText(folderLabel((String) row));
-                return;
-            }
-            CloudBrowser.Capture c = (CloudBrowser.Capture) row;
-            ItemHolder h = (ItemHolder) holder;
-            h.cellText.setText(cellLabel(c));
-            String detail = "判定: " + c.result;
-            if (c.shotAt != null) {
-                detail += "\n撮影: " + new SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()).format(c.shotAt);
-            }
-            h.resultText.setText(detail);
-            loadImage(h.imageView, c.imageKey);
-            h.itemView.setOnClickListener(v -> showDetail(c));
-        }
-
-        @Override
-        public int getItemCount() {
-            return rows.size();
-        }
-    }
-
-    private static class ItemHolder extends RecyclerView.ViewHolder {
-        final ImageView imageView;
-        final TextView cellText;
-        final TextView resultText;
-
-        ItemHolder(View v) {
-            super(v);
-            imageView = v.findViewById(R.id.imageView);
-            cellText = v.findViewById(R.id.cellText);
-            resultText = v.findViewById(R.id.resultText);
-        }
+        // 写真は撮影順に並べる
+        Collections.sort(list, (a, b) -> a.shotAt.compareTo(b.shotAt));
+        BackNumberDay.select(day.replace('_', '/'), list);
+        startActivity(new Intent(this, BackNumberMapActivity.class));
     }
 }

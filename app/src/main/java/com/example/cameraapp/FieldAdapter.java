@@ -22,9 +22,16 @@ public class FieldAdapter extends RecyclerView.Adapter<FieldAdapter.VH> {
 
     private final List<FieldCell> items;
     private final OnItemClickListener onClick;
+    private final ResultRepository repository;
 
     public FieldAdapter(List<FieldCell> items, OnItemClickListener onClick) {
+        this(items, ResultRepository.INSTANCE, onClick);
+    }
+
+    /** 平均・集計を表示する記録のリポジトリを指定する（バックナンバーのその日のマップ用） */
+    public FieldAdapter(List<FieldCell> items, ResultRepository repository, OnItemClickListener onClick) {
         this.items = items;
+        this.repository = repository;
         this.onClick = onClick;
     }
 
@@ -38,7 +45,7 @@ public class FieldAdapter extends RecyclerView.Adapter<FieldAdapter.VH> {
     @Override
     public void onBindViewHolder(@NonNull VH holder, int position) {
         FieldCell item = items.get(position);
-        holder.bind(item, onClick);
+        holder.bind(item, repository, onClick);
     }
 
     @Override
@@ -59,15 +66,15 @@ public class FieldAdapter extends RecyclerView.Adapter<FieldAdapter.VH> {
             txtStatus = itemView.findViewById(R.id.txtStatus); 
         }
 
-        public void bind(final FieldCell item, final OnItemClickListener onClick) {
+        public void bind(final FieldCell item, final ResultRepository repository, final OnItemClickListener onClick) {
             int cellId = item.getIndex();
             if (txtCellIndex != null) {
                 txtCellIndex.setText(String.valueOf(cellId));
             }
             
             // 平均健康度とサマリーを取得して表示
-            float avg = ResultRepository.INSTANCE.getAverageScore(cellId);
-            String summary = ResultRepository.INSTANCE.getBracketSummary(cellId);
+            float avg = repository.getAverageScore(cellId);
+            String summary = repository.getBracketSummary(cellId);
             
             if (txtPlantType != null) {
                 // 植物名と一緒に平均を表示

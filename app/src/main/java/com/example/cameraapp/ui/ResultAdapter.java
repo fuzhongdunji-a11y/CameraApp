@@ -1,7 +1,5 @@
 package com.example.cameraapp.ui;
 
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -66,14 +64,8 @@ public class ResultAdapter extends RecyclerView.Adapter<ResultAdapter.ViewHolder
         ).format(record.getTimestamp());
         holder.time.setText(formattedTime);
 
-        if (record.getImagePath() != null) {
-            try {
-                Bitmap bitmap = BitmapFactory.decodeFile(record.getImagePath());
-                holder.image.setImageBitmap(bitmap);
-            } catch (Exception e) {
-                holder.image.setImageResource(R.drawable.ic_launcher_background);
-            }
-        }
+        // 端末内のファイルと S3 の記録（バックナンバー）のどちらの写真も表示する
+        RecordImages.load(holder.image, record.getImagePath());
 
         holder.itemView.setOnClickListener(v -> {
             if (onClick != null) {

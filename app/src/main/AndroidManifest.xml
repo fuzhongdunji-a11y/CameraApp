@@ -30,6 +30,7 @@
         <activity android:name=".ui.DetailActivity" android:exported="false"/>
         <activity android:name=".ui.AbnormalListActivity" android:exported="false"/>
         <activity android:name=".ui.BackNumberActivity" android:exported="false"/>
+        <activity android:name=".ui.BackNumberMapActivity" android:exported="false"/>
 
     </application>
 </manifest>

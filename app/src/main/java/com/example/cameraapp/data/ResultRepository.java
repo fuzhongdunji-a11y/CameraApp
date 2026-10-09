@@ -25,6 +25,14 @@ public class ResultRepository {
 
     private ResultRepository() {}
 
+    /**
+     * 端末の記録とは別に、一時的に集計するためのリポジトリを作る
+     * （バックナンバーのその日のマップなど。ステータスの判定は INSTANCE と同じ）
+     */
+    public static ResultRepository newTemporary() {
+        return new ResultRepository();
+    }
+
     public void clearAll(SharedPreferences prefs) {
         results.clear();
         map.clear();
