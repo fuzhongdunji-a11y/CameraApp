@@ -304,6 +304,7 @@ public class MainActivity extends AppCompatActivity {
                                 // S3 へのアップロードはマップ画面の「クラウドに保存」ボタンで行う
                                 CellResult saved = saveResultToMap(cellIndex, result.getLabel(), savedPath, result.getConfidence());
 
+
                                 if (manual) {
                                     Toast.makeText(this, "手動保存しました", Toast.LENGTH_SHORT).show();
                                 } else if (isFirstFrame) {
@@ -311,6 +312,8 @@ public class MainActivity extends AppCompatActivity {
                                 }
                             }
                             if (savedDiseasePath != null) onDiseaseFrameSaved(savedDiseaseFrame, savedDiseasePath);
+
+
 
                             String status;
                             if (savedPath != null) {
