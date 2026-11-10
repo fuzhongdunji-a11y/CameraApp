@@ -6,11 +6,13 @@ import android.graphics.Color;
 import android.util.Log;
 
 import com.example.cameraapp.ClassificationResult;
+import com.example.cameraapp.CropUtils;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 import com.example.cameraapp.yolo.YoloDetector;
@@ -26,29 +28,81 @@ public class InferencePipeline {
     private final ClassifierCallback classifier;
     private Context context;
 
+    /** 判定に使った画像の種類 */
+    public static final String SOURCE_YOLO = "YOLO";   // YOLO で検出した領域を切り出して判定
+    public static final String SOURCE_FULL = "FULL";   // 画面全体で判定（YOLO で植物領域が見つからなかった場合）
+    public static final String SOURCE_NONE = "NONE";   // 判定していない（緑不足など）
+
     public static class Config {
         private final float greenThreshold;
-        public Config(float greenThreshold) { this.greenThreshold = greenThreshold; }
+        private final boolean useYoloCrop;
+        private final boolean fullFrameFallback;
+        private final float cropGreenThreshold;
+
+        /**
+         * @param greenThreshold    画面全体で判定する場合に必要な緑色画素の割合
+         * @param useYoloCrop       YOLO で検出した領域を切り出して分類モデルに渡すか
+         * @param fullFrameFallback YOLO で植物領域が見つからないとき、画面全体で判定するか
+         * @param cropGreenThreshold YOLO の切り出し領域を植物とみなすのに必要な緑色画素の割合。
+         *                          枠で背景がある程度除かれているが、つやのある果実や影の部分は
+         *                          緑判定から外れやすいため、画面全体より低めにしている
+         */
+        public Config(float greenThreshold, boolean useYoloCrop, boolean fullFrameFallback, float cropGreenThreshold) {
+            this.greenThreshold = greenThreshold;
+            this.useYoloCrop = useYoloCrop;
+            this.fullFrameFallback = fullFrameFallback;
+            this.cropGreenThreshold = cropGreenThreshold;
+        }
+        public Config(float greenThreshold) { this(greenThreshold, true, true, 0.15f); }
         public Config() { this(0.25f); } // 緑色の閾値を 25% に設定
         public float getGreenThreshold() { return greenThreshold; }
+        public boolean isUseYoloCrop() { return useYoloCrop; }
+        public boolean isFullFrameFallback() { return fullFrameFallback; }
+        public float getCropGreenThreshold() { return cropGreenThreshold; }
     }
+
+    // 切り出し時に検出枠の周囲を広げる割合（葉の縁が切れないように上下左右 10% ずつ）
+    private static final float CROP_MARGIN = 0.10f;
+    // 小さすぎる枠は分類に向かないので使わない（短辺のピクセル数）
+    private static final int MIN_CROP_SIZE = 64;
+    // 切り出しを試す検出枠の数（スコアの高い順）
+    private static final int MAX_CROP_CANDIDATES = 5;
 
     public static class Result {
         private final String label;
         private final float confidence;
         private final String savedImagePath;
         private final float greenRatio;
+        private final String source;
+        private final float yoloScore;
+        private final YoloDetector.Detection detection;
 
-        public Result(String label, float confidence, String savedImagePath, float greenRatio) {
+        public Result(String label, float confidence, String savedImagePath, float greenRatio,
+                      String source, float yoloScore, YoloDetector.Detection detection) {
             this.label = label;
             this.confidence = confidence;
             this.savedImagePath = savedImagePath;
             this.greenRatio = greenRatio;
+            this.source = source;
+            this.yoloScore = yoloScore;
+            this.detection = detection;
+        }
+        public Result(String label, float confidence, String savedImagePath, float greenRatio) {
+            this(label, confidence, savedImagePath, greenRatio, SOURCE_NONE, 0f, null);
         }
         public String getLabel() { return label; }
         public float getConfidence() { return confidence; }
         public String getSavedImagePath() { return savedImagePath; }
+        /** 判定に使った画像（切り出し画像または画面全体）の緑色画素の割合 */
         public float getGreenRatio() { return greenRatio; }
+        /** SOURCE_YOLO / SOURCE_FULL / SOURCE_NONE のいずれか */
+        public String getSource() { return source; }
+        /** 分類モデルで判定したか（false なら緑不足などで判定していない） */
+        public boolean isClassified() { return !SOURCE_NONE.equals(source); }
+        /** 切り出しに使った YOLO 検出のスコア（0〜1）。切り出していない場合は 0 */
+        public float getYoloScore() { return yoloScore; }
+        /** 切り出しに使った検出枠（元画像の座標）。切り出していない場合は null */
+        public YoloDetector.Detection getDetection() { return detection; }
     }
 
     public InferencePipeline(YoloDetector yoloDetector, Config config, ClassifierCallback classifier) {
@@ -72,34 +126,108 @@ public class InferencePipeline {
      * @param skipHealthy true の場合、判定結果が正常(healthy)のフレームは保存しない
      */
     public Result process(Bitmap bitmap, int cellIndex, boolean shouldSaveImage, boolean skipHealthy) {
-        float greenRatio = calculateGreenRatioFast(bitmap);
+        float frameGreenRatio = calculateGreenRatioFast(bitmap);
+
+        // 1. YOLO で検出した領域のうち、緑色が十分なものを切り出す
+        PlantCrop crop = config.isUseYoloCrop() ? findPlantCrop(bitmap) : null;
 
         String label;
         float confidence;
+        float greenRatio;
+        String source;
         String imagePath = null;
 
-        boolean enoughGreen = greenRatio >= config.getGreenThreshold();
-        if (enoughGreen) {
-            // 閾値以上の場合のみ、毎フレーム AI による分類を実行
+        if (crop != null) {
+            // 2. 切り出した画像を分類モデルに渡す
+            ClassificationResult classResult = classifier.classify(crop.bitmap);
+            label = classResult.getLabel();
+            confidence = classResult.getConfidence();
+            greenRatio = crop.greenRatio;
+            source = SOURCE_YOLO;
+            if (crop.bitmap != bitmap) crop.bitmap.recycle();
+        } else if (config.isFullFrameFallback() && frameGreenRatio >= config.getGreenThreshold()) {
+            // 3. 植物領域が見つからない場合は、従来どおり画面全体で判定する
             ClassificationResult classResult = classifier.classify(bitmap);
             label = classResult.getLabel();
             confidence = classResult.getConfidence();
+            greenRatio = frameGreenRatio;
+            source = SOURCE_FULL;
         } else {
-            // 緑色の割合が閾値未満の場合、判定をスキップし、ラベルを "Low Green"、スコアを 0 に固定
-            label = "Low Green";
+            // 緑色の割合が閾値未満（または植物領域なし）の場合は判定をスキップし、スコアを 0 に固定
+            label = config.isFullFrameFallback() || frameGreenRatio < config.getGreenThreshold()
+                    ? "Low Green" : "No Plant";
             confidence = 0.0f;
+            greenRatio = frameGreenRatio;
+            source = SOURCE_NONE;
         }
 
-        // 緑不足のフレームは保存しない。正常フレームは skipHealthy の場合保存しない
+        // 判定していないフレームは保存しない。正常フレームは skipHealthy の場合保存しない
+        // （保存するのは記録として見やすい画面全体の画像）
+        boolean classified = !SOURCE_NONE.equals(source);
         boolean healthy = "healthy".equalsIgnoreCase(label);
-        if (shouldSaveImage && enoughGreen && !(skipHealthy && healthy) && context != null) {
+        if (shouldSaveImage && classified && !(skipHealthy && healthy) && context != null) {
             imagePath = saveClassified(bitmap, cellIndex, label, confidence);
         }
 
-        Log.d("Pipeline", String.format(Locale.getDefault(), "Ratio: %.3f, Threshold: %.2f, Label: %s, Score: %.1f", 
-                greenRatio, config.getGreenThreshold(), label, confidence));
-        
-        return new Result(label, confidence, imagePath, greenRatio);
+        Log.d("Pipeline", String.format(Locale.getDefault(),
+                "Source: %s, YOLO: %.2f, Ratio: %.3f (frame %.3f), Threshold: %.2f, Label: %s, Score: %.1f",
+                source, crop != null ? crop.detection.score : 0f, greenRatio, frameGreenRatio,
+                config.getGreenThreshold(), label, confidence));
+
+        return new Result(label, confidence, imagePath, greenRatio, source,
+                crop != null ? crop.detection.score : 0f,
+                crop != null ? crop.detection : null);
+    }
+
+    /** 切り出した植物領域 */
+    private static class PlantCrop {
+        final Bitmap bitmap;
+        final YoloDetector.Detection detection;
+        final float greenRatio;
+
+        PlantCrop(Bitmap bitmap, YoloDetector.Detection detection, float greenRatio) {
+            this.bitmap = bitmap;
+            this.detection = detection;
+            this.greenRatio = greenRatio;
+        }
+    }
+
+    /**
+     * YOLO の検出枠をスコアの高い順に切り出し、緑色の割合が切り出し用の閾値以上の最初の領域を返す。
+     * 公開されている YOLO モデル（COCO 学習）は作物を「植物」として学習していないため、
+     * クラス名では絞らず、切り出した領域が緑色かどうかで植物領域とみなす。
+     * 見つからなければ null。
+     */
+    private PlantCrop findPlantCrop(Bitmap bitmap) {
+        if (yoloDetector == null) return null;
+
+        List<YoloDetector.Detection> detections;
+        try {
+            detections = yoloDetector.detect(bitmap); // スコアの高い順
+        } catch (Exception e) {
+            Log.e("Pipeline", "YOLO detect failed", e);
+            return null;
+        }
+
+        int tried = 0;
+        for (YoloDetector.Detection det : detections) {
+            if (tried >= MAX_CROP_CANDIDATES) break;
+            tried++;
+
+            Bitmap cropped = CropUtils.crop(bitmap, det, CROP_MARGIN);
+            if (cropped == null) continue;
+            if (Math.min(cropped.getWidth(), cropped.getHeight()) < MIN_CROP_SIZE) {
+                if (cropped != bitmap) cropped.recycle();
+                continue;
+            }
+
+            float ratio = calculateGreenRatioFast(cropped);
+            if (ratio >= config.getCropGreenThreshold()) {
+                return new PlantCrop(cropped, det, ratio);
+            }
+            if (cropped != bitmap) cropped.recycle();
+        }
+        return null;
     }
 
     public Result process(Bitmap bitmap, int cellIndex, boolean shouldSaveImage) {
