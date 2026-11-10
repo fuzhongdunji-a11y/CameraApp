@@ -55,3 +55,81 @@ public void add(CellResult record) {
 プロジェクト全体で緑色の判定閾値を 60% から 25% に変更しました。
 - InferencePipeline.java: 閾値デフォルト値を 0.25f に変更。
 - MainActivity.java: UI表示上の閾値表記を 0.25 に更新。
+
+
+【変更内容まとめ】YOLOで切り出した植物領域を分類モデルに渡す処理を復活（2026-11-10）
+
+1. YoloDetector.java の変更
+■ 入力データの並び順を修正
+モデルの入力は [1, 3, 640, 640]（チャンネルが先）なのに、RGBRGB... と画素ごとに並べて渡していたため、モデルに正しい画像が届いていませんでした。R の全画素 → G の全画素 → B の全画素 の順に並べるように修正しました。
+- 修正前: 最高スコア 0.02 程度（そのためスコアのしきい値が 0.005 になっていた）
+- 修正後: ピーマン画像で 0.77 など正常な値（PC で同じモデルを動かして確認）
+
+```java
+for (int v : intValues) buffer.putFloat(((v >> 16) & 0xFF) / 255f); // R
+for (int v : intValues) buffer.putFloat(((v >> 8) & 0xFF) / 255f);  // G
+for (int v : intValues) buffer.putFloat((v & 0xFF) / 255f);         // B
+```
+
+■ letterbox 前処理と座標の変換
+- アスペクト比を保ったまま 640x640 に収め、余白を灰色(114)で埋めるように変更しました。
+- 検出枠の座標を元画像のピクセル座標に戻して返すようにしました（以前は 640x640 の座標のままで、元画像で切り出すと位置がずれていた）。
+- スコアのしきい値を 0.005 から 0.25 に変更しました。
+
+2. CropUtils.java の変更
+■ 余白付きの切り出し
+検出枠の周囲を指定した割合だけ広げて切り出す crop(bitmap, det, margin) を追加しました。
+
+3. InferencePipeline.java の変更
+■ 判定の流れ
+1) YOLO で検出した枠をスコアの高い順に（最大5件）、上下左右 10% 広げて切り出す。
+2) 切り出した領域の緑比率が 15% 以上なら植物領域とみなし、その画像を分類モデルに渡す。
+   公開 YOLO モデル（COCO 学習）はピーマンを apple と判定するなどクラス名が当てにならないため、クラスでは絞らず緑色かどうかで判断する。短辺 64px 未満の枠は使わない。
+3) 植物領域が見つからない場合は、従来どおり画面全体の緑比率が 25% 以上なら画面全体を判定する。
+4) どちらも満たさない場合は従来どおり "Low Green" として判定しない。
+
+```java
+PlantCrop crop = config.isUseYoloCrop() ? findPlantCrop(bitmap) : null;
+if (crop != null) {
+    classResult = classifier.classify(crop.bitmap);   // YOLO 切り出し画像で判定
+} else if (config.isFullFrameFallback() && frameGreenRatio >= config.getGreenThreshold()) {
+    classResult = classifier.classify(bitmap);        // 画面全体で判定
+} else {
+    label = "Low Green"; confidence = 0.0f;           // 判定しない
+}
+```
+
+■ 設定と結果の追加
+- Config: useYoloCrop（切り出しを使うか）、fullFrameFallback（画面全体へのフォールバック）、cropGreenThreshold（切り出し領域の緑比率しきい値、既定 0.15）
+- Result: 判定対象（YOLO切り出し／画面全体／なし）、YOLO の検出スコア、検出枠
+- 保存する画像は従来どおり画面全体。
+
+4. MainActivity.java の変更
+■ 表示の追加
+- 結果表示に「判定対象: YOLO切り出し (検出スコア x.xx) / 画面全体 (植物領域の検出なし)」を追加しました。
+- 病気フレームかどうか・「緑不足」表示の判定を result.isClassified() で行うように変更しました。
+
+5. 未確認事項
+- Android Studio でのビルド・実機での動作は未確認。
+- 毎フレーム YOLO を実行するため、判定の間隔が以前より長くなる可能性がある。
+- 切り出し用しきい値 0.15 は資料内のピーマン画像（切り出し後 0.243）を基にした暫定値。
+
+
+【変更内容まとめ】YOLO の検出ログ追加と「検出箇所切り抜き」への表示（2026-11-10）
+
+1. InferencePipeline.java の変更
+■ YOLO の検出結果をログに出力
+YOLO が動いているか確認できるよう、タグ「PipelineYolo」で検出数と各候補の内容を出すようにしました。
+- YOLO detections: 検出数
+- #番号 class=クラス番号 score=スコア box=(中心x,中心y 幅x高さ) cropGreen=切り出し領域の緑比率 (need しきい値)
+
+■ 切り出し画像を結果に含める
+分類モデルに渡した切り出し画像を Result.getCroppedBitmap() で取り出せるようにしました（切り出していない場合は null）。
+
+2. MainActivity.java の変更
+■ 「検出箇所切り抜き」に表示
+画面の「▼ 検出箇所切り抜き」（croppedImageView）に、分類モデルに渡した切り出し画像を表示するようにしました。YOLO で切り出していないフレーム（画面全体で判定・緑不足）では表示を消します。
+※ 異常記録中のフレームでは表示を更新しません。
+
+3. 未確認事項
+- Android Studio でのビルド・実機での表示は未確認。

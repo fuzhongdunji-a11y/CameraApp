@@ -3,6 +3,9 @@ package com.example.cameraapp.yolo;
 import android.content.Context;
 import android.content.res.AssetFileDescriptor;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.util.Log;
 
 import org.tensorflow.lite.Interpreter;
@@ -22,9 +25,14 @@ import java.util.List;
 public class YoloDetector {
 
     public static final int INPUT_SIZE = 640;
-    public static final float CONF_THRESHOLD = 0.005f;
+    // 物体らしさのスコアがこれ未満の候補は捨てる（以前は 0.005 だったが、入力形式の誤りで
+    // スコアが極端に低くなっていたため。正しい入力では 0.25 程度が一般的）
+    public static final float CONF_THRESHOLD = 0.25f;
+    // letterbox の余白に使う色（YOLOv8 の学習時と同じ灰色 114）
+    private static final int PAD_COLOR = Color.rgb(114, 114, 114);
     public static final float IOU_THRESHOLD = 0.5f;
 
+    /** 検出結果。x, y は枠の中心、w, h は幅と高さ（いずれも detect() に渡した元画像のピクセル座標） */
     public static class Detection {
         public final float x, y, w, h, score;
         public final int classId;
@@ -64,13 +72,41 @@ public class YoloDetector {
     }
 
     public List<Detection> detect(Bitmap bitmap) {
-        Bitmap resized = Bitmap.createScaledBitmap(bitmap, INPUT_SIZE, INPUT_SIZE, true);
-        ByteBuffer input = bitmapToBuffer(resized);
+        // アスペクト比を保ったまま 640x640 に収め、余白を灰色で埋める（letterbox）
+        int srcW = bitmap.getWidth();
+        int srcH = bitmap.getHeight();
+        float scale = Math.min((float) INPUT_SIZE / srcW, (float) INPUT_SIZE / srcH);
+        int newW = Math.max(1, Math.round(srcW * scale));
+        int newH = Math.max(1, Math.round(srcH * scale));
+        float padX = (INPUT_SIZE - newW) / 2f;
+        float padY = (INPUT_SIZE - newH) / 2f;
+
+        Bitmap letterboxed = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(letterboxed);
+        canvas.drawColor(PAD_COLOR);
+        Bitmap resized = Bitmap.createScaledBitmap(bitmap, newW, newH, true);
+        canvas.drawBitmap(resized, padX, padY, new Paint(Paint.FILTER_BITMAP_FLAG));
+        if (resized != bitmap) resized.recycle();
+
+        ByteBuffer input = bitmapToBuffer(letterboxed);
+        letterboxed.recycle();
 
         interpreter.run(input, outputBuffer);
 
         List<Detection> raw = parseOutput(outputBuffer);
-        return nms(raw);
+        List<Detection> kept = nms(raw);
+
+        // letterbox 後の座標を元画像の座標に戻す
+        List<Detection> mapped = new ArrayList<>(kept.size());
+        for (Detection d : kept) {
+            mapped.add(new Detection(
+                    (d.x - padX) / scale,
+                    (d.y - padY) / scale,
+                    d.w / scale,
+                    d.h / scale,
+                    d.score, d.classId, d.label));
+        }
+        return mapped;
     }
 
     private List<Detection> parseOutput(float[][][] output) {
@@ -150,6 +186,11 @@ public class YoloDetector {
         return inter / (areaA + areaB - inter);
     }
 
+    /**
+     * モデルの入力は [1, 3, 640, 640]（チャンネルが先の NCHW 形式）なので、
+     * R の全画素 → G の全画素 → B の全画素 の順に並べる。
+     * （以前は RGBRGB... と画素ごとに並べており、モデルに正しい画像が渡っていなかった）
+     */
     private ByteBuffer bitmapToBuffer(Bitmap bitmap) {
         ByteBuffer buffer = ByteBuffer.allocateDirect(1 * INPUT_SIZE * INPUT_SIZE * 3 * 4);
         buffer.order(ByteOrder.nativeOrder());
@@ -157,11 +198,9 @@ public class YoloDetector {
         int[] intValues = new int[INPUT_SIZE * INPUT_SIZE];
         bitmap.getPixels(intValues, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE);
 
-        for (int v : intValues) {
-            buffer.putFloat(((v >> 16) & 0xFF) / 255f);
-            buffer.putFloat(((v >> 8) & 0xFF) / 255f);
-            buffer.putFloat((v & 0xFF) / 255f);
-        }
+        for (int v : intValues) buffer.putFloat(((v >> 16) & 0xFF) / 255f);
+        for (int v : intValues) buffer.putFloat(((v >> 8) & 0xFF) / 255f);
+        for (int v : intValues) buffer.putFloat((v & 0xFF) / 255f);
         buffer.rewind();
         return buffer;
     }

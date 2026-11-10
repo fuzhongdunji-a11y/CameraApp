@@ -15,6 +15,7 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.ImageView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -284,7 +285,7 @@ public class MainActivity extends AppCompatActivity {
                     BestFrameSelector.Candidate diseaseFrame = null;
                     String diseasePath = null;
                     if (autoDisease && result != null) {
-                        boolean diseased = result.getGreenRatio() >= pipeline.getConfig().getGreenThreshold()
+                        boolean diseased = result.isClassified()
                                 && !"healthy".equalsIgnoreCase(result.getLabel());
                         if (diseased) {
                             diseaseSelector.offer(bitmap, cellIndex, result.getLabel(), result.getConfidence(), now);
@@ -298,7 +299,10 @@ public class MainActivity extends AppCompatActivity {
 
                     runOnUiThread(() -> {
                         if (result != null) {
-                            float threshold = 0.25f;
+                            // 切り出し画像で判定した場合は切り出し用のしきい値を表示する
+                            InferencePipeline.Config cfg = pipeline.getConfig();
+                            float threshold = InferencePipeline.SOURCE_YOLO.equals(result.getSource())
+                                    ? cfg.getCropGreenThreshold() : cfg.getGreenThreshold();
                             String savedPath = result.getSavedImagePath();
                             if (savedPath != null) {
                                 // S3 へのアップロードはマップ画面の「クラウドに保存」ボタンで行う
@@ -322,17 +326,35 @@ public class MainActivity extends AppCompatActivity {
                                 status = "【保存完了】";
                             } else if (diseasePending) {
                                 status = "【病気検出・保存待ち】";
-                            } else if (result.getGreenRatio() < threshold) {
+                            } else if (!result.isClassified()) {
                                 status = "【緑不足】";
                             } else {
                                 status = "【待機中】";
                             }
 
                             // 精度を上げるため、判定(Confidence)を小数第3位まで表示するように変更
+                            String target;
+                            if (InferencePipeline.SOURCE_YOLO.equals(result.getSource())) {
+                                target = String.format(Locale.getDefault(), "YOLO切り出し (検出スコア %.2f)", result.getYoloScore());
+                            } else if (InferencePipeline.SOURCE_FULL.equals(result.getSource())) {
+                                target = "画面全体 (植物領域の検出なし)";
+                            } else {
+                                target = "なし";
+                            }
                             String info = String.format(Locale.getDefault(),
-                                    "%s\n判定: %s (%.3f%%)\n緑比率: %.3f (しきい値: %.2f)",
-                                    status, result.getLabel(), result.getConfidence(), result.getGreenRatio(), threshold);
+                                    "%s\n判定: %s (%.3f%%)\n判定対象: %s\n緑比率: %.3f (しきい値: %.2f)",
+                                    status, result.getLabel(), result.getConfidence(), target, result.getGreenRatio(), threshold);
                             resultTextView.setText(info);
+
+                            // 分類モデルに渡した切り出し画像を「検出箇所切り抜き」に表示する
+                            ImageView croppedView = findViewById(R.id.croppedImageView);
+                            if (croppedView != null) {
+                                if (result.getCroppedBitmap() != null) {
+                                    croppedView.setImageBitmap(result.getCroppedBitmap());
+                                } else {
+                                    croppedView.setImageDrawable(null);
+                                }
+                            }
                         }
                     });
                 }
