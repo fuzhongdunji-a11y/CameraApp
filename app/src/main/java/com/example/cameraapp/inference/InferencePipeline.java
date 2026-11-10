@@ -76,9 +76,11 @@ public class InferencePipeline {
         private final String source;
         private final float yoloScore;
         private final YoloDetector.Detection detection;
+        private final Bitmap croppedBitmap;
 
         public Result(String label, float confidence, String savedImagePath, float greenRatio,
-                      String source, float yoloScore, YoloDetector.Detection detection) {
+                      String source, float yoloScore, YoloDetector.Detection detection,
+                      Bitmap croppedBitmap) {
             this.label = label;
             this.confidence = confidence;
             this.savedImagePath = savedImagePath;
@@ -86,9 +88,10 @@ public class InferencePipeline {
             this.source = source;
             this.yoloScore = yoloScore;
             this.detection = detection;
+            this.croppedBitmap = croppedBitmap;
         }
         public Result(String label, float confidence, String savedImagePath, float greenRatio) {
-            this(label, confidence, savedImagePath, greenRatio, SOURCE_NONE, 0f, null);
+            this(label, confidence, savedImagePath, greenRatio, SOURCE_NONE, 0f, null, null);
         }
         public String getLabel() { return label; }
         public float getConfidence() { return confidence; }
@@ -103,6 +106,8 @@ public class InferencePipeline {
         public float getYoloScore() { return yoloScore; }
         /** 切り出しに使った検出枠（元画像の座標）。切り出していない場合は null */
         public YoloDetector.Detection getDetection() { return detection; }
+        /** 分類モデルに渡した切り出し画像（画面の「検出箇所切り抜き」に表示する）。切り出していない場合は null */
+        public Bitmap getCroppedBitmap() { return croppedBitmap; }
     }
 
     public InferencePipeline(YoloDetector yoloDetector, Config config, ClassifierCallback classifier) {
@@ -144,7 +149,7 @@ public class InferencePipeline {
             confidence = classResult.getConfidence();
             greenRatio = crop.greenRatio;
             source = SOURCE_YOLO;
-            if (crop.bitmap != bitmap) crop.bitmap.recycle();
+            // 切り出し画像は画面表示に使うため、ここでは recycle しない
         } else if (config.isFullFrameFallback() && frameGreenRatio >= config.getGreenThreshold()) {
             // 3. 植物領域が見つからない場合は、従来どおり画面全体で判定する
             ClassificationResult classResult = classifier.classify(bitmap);
@@ -176,7 +181,8 @@ public class InferencePipeline {
 
         return new Result(label, confidence, imagePath, greenRatio, source,
                 crop != null ? crop.detection.score : 0f,
-                crop != null ? crop.detection : null);
+                crop != null ? crop.detection : null,
+                crop != null ? crop.bitmap : null);
     }
 
     /** 切り出した植物領域 */

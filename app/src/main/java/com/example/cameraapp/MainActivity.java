@@ -15,6 +15,7 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.ImageView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -344,6 +345,16 @@ public class MainActivity extends AppCompatActivity {
                                     "%s\n判定: %s (%.3f%%)\n判定対象: %s\n緑比率: %.3f (しきい値: %.2f)",
                                     status, result.getLabel(), result.getConfidence(), target, result.getGreenRatio(), threshold);
                             resultTextView.setText(info);
+
+                            // 分類モデルに渡した切り出し画像を「検出箇所切り抜き」に表示する
+                            ImageView croppedView = findViewById(R.id.croppedImageView);
+                            if (croppedView != null) {
+                                if (result.getCroppedBitmap() != null) {
+                                    croppedView.setImageBitmap(result.getCroppedBitmap());
+                                } else {
+                                    croppedView.setImageDrawable(null);
+                                }
+                            }
                         }
                     });
                 }
