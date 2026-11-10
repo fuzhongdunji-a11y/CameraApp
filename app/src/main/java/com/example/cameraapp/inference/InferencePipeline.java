@@ -209,6 +209,8 @@ public class InferencePipeline {
             return null;
         }
 
+        Log.d("PipelineYolo", "YOLO detections: " + detections.size());
+
         int tried = 0;
         for (YoloDetector.Detection det : detections) {
             if (tried >= MAX_CROP_CANDIDATES) break;
@@ -222,6 +224,10 @@ public class InferencePipeline {
             }
 
             float ratio = calculateGreenRatioFast(cropped);
+            Log.d("PipelineYolo", String.format(Locale.getDefault(),
+                    "  #%d class=%d score=%.2f box=(%.0f,%.0f %.0fx%.0f) cropGreen=%.3f (need %.2f)",
+                    tried, det.classId, det.score, det.x, det.y, det.w, det.h, ratio,
+                    config.getCropGreenThreshold()));
             if (ratio >= config.getCropGreenThreshold()) {
                 return new PlantCrop(cropped, det, ratio);
             }
