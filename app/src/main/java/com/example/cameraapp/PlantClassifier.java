@@ -12,7 +12,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -27,6 +26,8 @@ public class PlantClassifier {
     private Interpreter tflite;
     private List<String> classNames = Collections.emptyList();
     private int inputSize = 256; 
+    private int modelNumClasses = 2;
+    private boolean collapseToBinary = false;
 
     // 数値の偏りを和らげるパラメータ (値を大きくするほど信頼度がマイルドになる)
     // 99%以上に張り付くのを防ぐため 2.5f から 5.0f に引き上げ
@@ -65,11 +66,12 @@ public class PlantClassifier {
             labelMap.put(2, Arrays.asList("diseased", "healthy"));
             labelMap.put(3, Arrays.asList("early_blight", "late_blight", "healthy"));
 
+            modelNumClasses = numClasses;
             classNames = labelMap.get(numClasses);
-            if (classNames == null) {
-                classNames = new ArrayList<>();
-                for (int i = 0; i < numClasses; i++) classNames.add("class_" + i);
-            }
+            // 4クラス以上のモデル（トマト・りんご・ブドウ・コーン）は「健康 / それ以外」の2値にまとめる。
+            // 学習時のクラス順はフォルダ名の文字コード順で、healthy は最後の番号になる前提。
+            collapseToBinary = (classNames == null);
+            if (collapseToBinary) classNames = Arrays.asList("diseased", "healthy");
         } catch (Exception e) {
             Log.e("CLASSIFIER", "Load failed", e);
         }
@@ -79,10 +81,15 @@ public class PlantClassifier {
         if (tflite == null) return new ClassificationResult("Error", 0f);
 
         ByteBuffer input = preprocess(bitmap);
-        float[][] output = new float[1][classNames.size()];
+        float[][] output = new float[1][modelNumClasses];
         tflite.run(input, output);
 
         float[] rawProbs = output[0];
+        if (collapseToBinary) {
+            // healthy（最後のクラス）の確率と、それ以外の合計の2値にする
+            float healthy = rawProbs[rawProbs.length - 1];
+            rawProbs = new float[]{1f - healthy, healthy};
+        }
         
         // 温度スケーリングを適用して数値をマイルドにする
         float[] softenedProbs = applyTemperatureScaling(rawProbs, TEMPERATURE);
@@ -116,10 +123,11 @@ public class PlantClassifier {
         buffer.order(ByteOrder.nativeOrder());
         int[] pixels = new int[inputSize * inputSize];
         resized.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize);
+        // モデル内部に Rescaling(1/255) があるため、ここでは 0〜255 のまま渡す（/255 すると二重正規化になる）
         for (int p : pixels) {
-            buffer.putFloat(((p >> 16) & 0xFF) / 255f);
-            buffer.putFloat(((p >> 8) & 0xFF) / 255f);
-            buffer.putFloat((p & 0xFF) / 255f);
+            buffer.putFloat((p >> 16) & 0xFF);
+            buffer.putFloat((p >> 8) & 0xFF);
+            buffer.putFloat(p & 0xFF);
         }
         if (resized != bitmap) resized.recycle();
         buffer.rewind();
