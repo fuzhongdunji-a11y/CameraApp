@@ -13,6 +13,9 @@
     # 修正前のアプリと同じ入力（/255 の二重正規化）で評価して比較する
     python tools/evaluate_models.py --data "...\\valid" --crop Pepper --preprocess double
 
+    # 修正前と修正後の両方を評価し、比較表（summary_compare.csv）とグラフ（compare_accuracy.png）を作る
+    python tools/evaluate_models.py --data "...\\valid" --preprocess both
+
 フォルダ構成:
     <data>/<作物名>/<クラス名>/*.jpg     （学習時の image_dataset_from_directory と同じ構成）
 
@@ -211,14 +214,69 @@ def evaluate_crop(crop, crop_dir, model_path, preprocess, out_dir, limit):
     return summary
 
 
+def write_csv(path, rows):
+    keys = []
+    for r in rows:
+        keys += [k for k in r if k not in keys]
+    with open(path, "w", newline="", encoding="utf-8-sig") as fp_:
+        w = csv.DictWriter(fp_, fieldnames=keys)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_comparison(raw, double, out_dir):
+    """修正後（raw）と修正前（double: 二重正規化）の結果を作物ごとに並べる。"""
+    before = {s["crop"]: s for s in double}
+    rows = []
+    print("\n===== 二重正規化の修正前後の比較 =====")
+    print(f"{'作物':<12}{'修正前 正解率':>14}{'修正後 正解率':>14}{'修正前 2値F1':>14}{'修正後 2値F1':>14}")
+    for a in raw:
+        b = before.get(a["crop"])
+        if not b:
+            continue
+        row = {"crop": a["crop"], "images": a["images"],
+               "accuracy_before": b["accuracy"], "accuracy_after": a["accuracy"],
+               "macro_f1_before": b["macro_f1"], "macro_f1_after": a["macro_f1"]}
+        for k in ("bin_accuracy", "bin_precision", "bin_recall", "bin_f1"):
+            if k in a and k in b:
+                row[k + "_before"] = b[k]
+                row[k + "_after"] = a[k]
+        rows.append(row)
+        print(f"{a['crop']:<12}{b['accuracy']:>16.4f}{a['accuracy']:>16.4f}"
+              f"{row.get('bin_f1_before', float('nan')):>16.4f}{row.get('bin_f1_after', float('nan')):>16.4f}")
+    path = os.path.join(out_dir, "summary_compare.csv")
+    write_csv(path, rows)
+    print(f"比較のまとめ: {path}")
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+    x = np.arange(len(rows))
+    fig, ax = plt.subplots(figsize=(max(6, 1.1 * len(rows) + 2), 4.2))
+    ax.bar(x - 0.2, [r["accuracy_before"] for r in rows], 0.4, label="Before (double /255)", color="#9aa5b1")
+    ax.bar(x + 0.2, [r["accuracy_after"] for r in rows], 0.4, label="After (fixed)", color="#2a6fb0")
+    ax.set_xticks(x)
+    ax.set_xticklabels([r["crop"] for r in rows], rotation=30, ha="right")
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Accuracy")
+    ax.set_title("Accuracy before / after fixing double normalization")
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, "compare_accuracy.png"), dpi=150)
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser(description="分類モデル（tflite）の精度評価")
     ap.add_argument("--data", required=True, help="検証データのフォルダ（この下に作物名のフォルダがある）")
     ap.add_argument("--crop", help="評価する作物のフォルダ名（例: Pepper）。省略するとすべて評価")
     ap.add_argument("--model", help="tflite のパス。省略すると app/src/main/assets から作物名で探す")
     ap.add_argument("--model-dir", default=DEFAULT_MODEL_DIR, help="tflite を探すフォルダ")
-    ap.add_argument("--preprocess", choices=["raw", "double"], default="raw",
-                    help="raw: 0〜255のまま渡す（修正後のアプリ）。double: /255 してから渡す（修正前のアプリ）")
+    ap.add_argument("--preprocess", choices=["raw", "double", "both"], default="raw",
+                    help="raw: 0〜255のまま渡す（修正後のアプリ）。double: /255 してから渡す（修正前のアプリ）。"
+                         "both: 両方を評価して比較表を作る")
     ap.add_argument("--limit", type=int, default=0, help="クラスごとに使う枚数の上限（動作確認用）")
     ap.add_argument("--out", default="eval_out", help="結果の保存先フォルダ")
     args = ap.parse_args()
@@ -228,32 +286,33 @@ def main():
     else:
         crops = sorted(d for d in os.listdir(args.data) if os.path.isdir(os.path.join(args.data, d)))
 
-    summaries = []
-    for crop in crops:
-        crop_dir = os.path.join(args.data, crop)
-        if not os.path.isdir(crop_dir):
-            print(f"[{crop}] フォルダがありません: {crop_dir}")
-            continue
-        model_path = args.model if (args.model and args.crop) else find_model(args.model_dir, crop)
-        if not model_path or not os.path.isfile(model_path):
-            print(f"[{crop}] 対応する tflite が見つかりません。--model で指定してください。")
-            continue
-        s = evaluate_crop(crop, crop_dir, model_path, args.preprocess, args.out, args.limit)
-        if s:
-            summaries.append(s)
+    modes = ["raw", "double"] if args.preprocess == "both" else [args.preprocess]
+    results = {}
+    for mode in modes:
+        if len(modes) > 1:
+            print(f"\n########## 入力方式: {mode} ##########")
+        summaries = []
+        for crop in crops:
+            crop_dir = os.path.join(args.data, crop)
+            if not os.path.isdir(crop_dir):
+                print(f"[{crop}] フォルダがありません: {crop_dir}")
+                continue
+            model_path = args.model if (args.model and args.crop) else find_model(args.model_dir, crop)
+            if not model_path or not os.path.isfile(model_path):
+                print(f"[{crop}] 対応する tflite が見つかりません。--model で指定してください。")
+                continue
+            s = evaluate_crop(crop, crop_dir, model_path, mode, args.out, args.limit)
+            if s:
+                summaries.append(s)
+        if not summaries:
+            sys.exit("評価できた作物がありません。")
+        path = os.path.join(args.out, f"summary_{mode}.csv")
+        write_csv(path, summaries)
+        print(f"\nまとめ: {path}")
+        results[mode] = summaries
 
-    if not summaries:
-        sys.exit("評価できた作物がありません。")
-    keys = []
-    for s in summaries:
-        keys += [k for k in s if k not in keys]
-    path = os.path.join(args.out, f"summary_{args.preprocess}.csv")
-    with open(path, "w", newline="", encoding="utf-8-sig") as fp_:
-        w = csv.DictWriter(fp_, fieldnames=keys)
-        w.writeheader()
-        w.writerows(summaries)
-    print(f"\nまとめ: {path}")
-
+    if len(modes) > 1:
+        write_comparison(results["raw"], results["double"], args.out)
 
 if __name__ == "__main__":
     main()

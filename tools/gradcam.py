@@ -10,6 +10,9 @@
     # 評価スクリプトの結果から、間違えた画像だけを対象にする
     python tools/gradcam.py --h5 pepper_model_densenet_finetuned.h5 --from-csv eval_out/Pepper_raw_predictions.csv --only-wrong
 
+    # 正解した画像を、クラスごとに10枚ずつ対象にする（正しい場所を見て当てているかの確認）
+    python tools/gradcam.py --h5 pepper_model.h5 --from-csv eval_out/Pepper_raw_predictions.csv --only-correct --limit 10 --out gradcam_correct
+
 出力: <out>/<元のフォルダ名>/<ファイル名>_cam.png（左: 元画像、右: ヒートマップを重ねた画像）
       赤いほど、その判定に強く効いた場所。
 
@@ -96,12 +99,19 @@ def collect_images(args):
     """(画像パス, 正解ラベルまたは None) のリストを返す。"""
     items = []
     if args.from_csv:
+        count = {}
         with open(args.from_csv, newline="", encoding="utf-8-sig") as fp:
             for row in csv.DictReader(fp):
                 if args.only_wrong and row["true"] == row["pred"]:
                     continue
+                if args.only_correct and row["true"] != row["pred"]:
+                    continue
+                # --limit は正解ラベルごとの枚数の上限
+                count[row["true"]] = count.get(row["true"], 0) + 1
+                if args.limit and count[row["true"]] > args.limit:
+                    continue
                 items.append((row["path"], row["true"]))
-        return items[:args.limit] if args.limit else items
+        return items
     if os.path.isfile(args.images):
         return [(args.images, None)]
     for root, _, files in sorted(os.walk(args.images)):
@@ -119,11 +129,14 @@ def main():
     ap.add_argument("--images", help="画像ファイル、または画像フォルダ（サブフォルダも対象）")
     ap.add_argument("--from-csv", help="evaluate_models.py が出力した *_predictions.csv")
     ap.add_argument("--only-wrong", action="store_true", help="--from-csv のうち、間違えた画像だけを対象にする")
+    ap.add_argument("--only-correct", action="store_true", help="--from-csv のうち、正解した画像だけを対象にする")
     ap.add_argument("--class-index", type=int, default=None,
                     help="ヒートマップの対象クラス番号。省略するとモデルが予測したクラス")
-    ap.add_argument("--limit", type=int, default=0, help="フォルダごと（CSV の場合は全体）の枚数の上限")
+    ap.add_argument("--limit", type=int, default=0, help="フォルダごと（CSV の場合は正解ラベルごと）の枚数の上限")
     ap.add_argument("--out", default="gradcam_out", help="保存先フォルダ")
     args = ap.parse_args()
+    if args.only_wrong and args.only_correct:
+        ap.error("--only-wrong と --only-correct は同時に指定できません。")
     if not args.images and not args.from_csv:
         ap.error("--images か --from-csv のどちらかを指定してください。")
 

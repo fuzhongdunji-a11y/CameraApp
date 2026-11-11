@@ -505,3 +505,19 @@
 - gradcam.py は、同じ構成（Resizing → Rescaling → DenseNet121 → GAP → Dense）で重みが乱数のダミーモデルと
     ダミー画像で動作を確認（TensorFlow 2.21）。実際の .h5 と検証データでの実行は未確認。
 - PlantClassifier.java のビルド・実機での動作は未確認。
+
+========================================
+2026-11-12  評価スクリプトに修正前後の比較、Grad-CAM に正解画像の指定を追加
+========================================
+
+■ tools/evaluate_models.py
+- --preprocess both を追加。修正後（raw）と修正前（double: 二重正規化）の両方を続けて評価し、
+    作物ごとの比較表（eval_out/summary_compare.csv）と正解率の比較グラフ（eval_out/compare_accuracy.png）を出力する。
+
+■ tools/gradcam.py
+- --only-correct を追加（--from-csv のうち、正解した画像だけを対象にする）。
+- --from-csv のときの --limit を「全体の上限」から「正解ラベルごとの上限」に変更
+    （健康・病気の両方から同じ枚数を取り出せるように）。
+
+■ 未確認事項
+- ダミー画像・ダミーモデルで動作を確認。実際の検証データでの実行は未確認。
