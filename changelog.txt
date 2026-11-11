@@ -483,3 +483,25 @@
 ■ 未確認事項
 - 乱数で作ったダミー画像で最後まで動くことのみ確認。実際の検証データでの実行は未確認。
 - 推論時間は PC 上の値で、端末上の速度ではない。
+
+========================================
+2026-11-11  Grad-CAM のヒートマップ作成スクリプトと、端末での推論時間ログを追加
+========================================
+
+■ tools/gradcam.py（新規）
+- Keras モデル（.h5）が画像のどこを見て判定したかを Grad-CAM で可視化し、元画像と並べて PNG で保存する。
+- 対象は画像フォルダ（--images）、または評価スクリプトの *_predictions.csv（--from-csv）。
+    --only-wrong を付けると、間違えた画像だけを対象にできる。
+- モデルを「前処理の層 → DenseNet121 → 判定の層」に分け、DenseNet121 の最後の特徴マップ（8x8）で計算する。
+- 結果は gradcam_out/ に保存。
+
+■ PlantClassifier.java
+- classifyImage() に推論時間のログを追加（Logcat のタグ "CLASSIFIER_TIME"、前処理と推論のミリ秒）。
+
+■ .gitignore
+- gradcam_out/ を追加。
+
+■ 未確認事項
+- gradcam.py は、同じ構成（Resizing → Rescaling → DenseNet121 → GAP → Dense）で重みが乱数のダミーモデルと
+    ダミー画像で動作を確認（TensorFlow 2.21）。実際の .h5 と検証データでの実行は未確認。
+- PlantClassifier.java のビルド・実機での動作は未確認。

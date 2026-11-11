@@ -80,9 +80,15 @@ public class PlantClassifier {
     public synchronized ClassificationResult classifyImage(Bitmap bitmap) {
         if (tflite == null) return new ClassificationResult("Error", 0f);
 
+        long t0 = System.nanoTime();
         ByteBuffer input = preprocess(bitmap);
+        long t1 = System.nanoTime();
         float[][] output = new float[1][modelNumClasses];
         tflite.run(input, output);
+        long t2 = System.nanoTime();
+        // 推論速度の計測用ログ（Logcat で "CLASSIFIER_TIME" を絞り込む）
+        Log.d("CLASSIFIER_TIME", String.format(Locale.US, "%s preprocess=%.1fms inference=%.1fms",
+                currentPlant, (t1 - t0) / 1e6, (t2 - t1) / 1e6));
 
         float[] rawProbs = output[0];
         if (collapseToBinary) {
