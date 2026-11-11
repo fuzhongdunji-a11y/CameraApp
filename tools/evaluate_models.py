@@ -218,10 +218,31 @@ def write_csv(path, rows):
     keys = []
     for r in rows:
         keys += [k for k in r if k not in keys]
-    with open(path, "w", newline="", encoding="utf-8-sig") as fp_:
+    try:
+        fp_ = open(path, "w", newline="", encoding="utf-8-sig")
+    except PermissionError:
+        # Excel などで開いたままだと上書きできないので、別名で保存する
+        base, ext = os.path.splitext(path)
+        path = f"{base}_{time.strftime('%Y%m%d_%H%M%S')}{ext}"
+        print(f"上書きできなかったため、別名で保存します（元のファイルを Excel などで開いていませんか）: {path}")
+        fp_ = open(path, "w", newline="", encoding="utf-8-sig")
+    with fp_:
         w = csv.DictWriter(fp_, fieldnames=keys)
         w.writeheader()
         w.writerows(rows)
+    return path
+
+
+def read_summary(path):
+    """保存済みの summary_*.csv を読み、数値の列を数値に戻す。"""
+    rows = []
+    with open(path, newline="", encoding="utf-8-sig") as fp_:
+        for row in csv.DictReader(fp_):
+            for k, v in row.items():
+                if k not in ("crop", "model", "preprocess") and v not in ("", None):
+                    row[k] = float(v)
+            rows.append(row)
+    return rows
 
 
 def write_comparison(raw, double, out_dir):
@@ -234,6 +255,9 @@ def write_comparison(raw, double, out_dir):
         b = before.get(a["crop"])
         if not b:
             continue
+        if a["images"] != b["images"]:
+            print(f"[{a['crop']}] 注意: 修正前後で画像の枚数が違います（{int(b['images'])} / {int(a['images'])}）。"
+                  "--limit などの条件をそろえて評価し直してください。")
         row = {"crop": a["crop"], "images": a["images"],
                "accuracy_before": b["accuracy"], "accuracy_after": a["accuracy"],
                "macro_f1_before": b["macro_f1"], "macro_f1_after": a["macro_f1"]}
@@ -244,8 +268,9 @@ def write_comparison(raw, double, out_dir):
         rows.append(row)
         print(f"{a['crop']:<12}{b['accuracy']:>16.4f}{a['accuracy']:>16.4f}"
               f"{row.get('bin_f1_before', float('nan')):>16.4f}{row.get('bin_f1_after', float('nan')):>16.4f}")
-    path = os.path.join(out_dir, "summary_compare.csv")
-    write_csv(path, rows)
+    if not rows:
+        return
+    path = write_csv(os.path.join(out_dir, "summary_compare.csv"), rows)
     print(f"比較のまとめ: {path}")
     try:
         import matplotlib
@@ -306,12 +331,16 @@ def main():
                 summaries.append(s)
         if not summaries:
             sys.exit("評価できた作物がありません。")
-        path = os.path.join(args.out, f"summary_{mode}.csv")
-        write_csv(path, summaries)
+        path = write_csv(os.path.join(args.out, f"summary_{mode}.csv"), summaries)
         print(f"\nまとめ: {path}")
         results[mode] = summaries
 
-    if len(modes) > 1:
+    # 片方だけ評価した場合も、もう片方の保存済みの結果があれば比較表を作る
+    for mode in ("raw", "double"):
+        saved = os.path.join(args.out, f"summary_{mode}.csv")
+        if mode not in results and os.path.isfile(saved):
+            results[mode] = read_summary(saved)
+    if "raw" in results and "double" in results:
         write_comparison(results["raw"], results["double"], args.out)
 
 if __name__ == "__main__":
