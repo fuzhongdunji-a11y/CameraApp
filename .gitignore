@@ -27,3 +27,7 @@ amplifyconfiguration*
 
 # ビルドに含まれていない OpenCV SDK（settings.gradle.kts は :app のみ）
 /opencv
+
+# 評価スクリプトの出力
+eval_out/
+gradcam_out/
