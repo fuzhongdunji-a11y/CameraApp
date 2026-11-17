@@ -33,3 +33,5 @@ eval_out/
 gradcam_out/
 train_out/
 wandb/
+plantdoc_src/
+plantdoc_crops/
