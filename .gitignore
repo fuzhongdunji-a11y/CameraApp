@@ -35,3 +35,4 @@ train_out/
 wandb/
 plantdoc_src/
 plantdoc_crops/
+leaf_out/
