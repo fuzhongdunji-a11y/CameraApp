@@ -36,3 +36,5 @@ wandb/
 plantdoc_src/
 plantdoc_crops/
 leaf_out/
+dis_out/
+pv/
