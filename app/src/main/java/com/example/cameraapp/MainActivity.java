@@ -55,7 +55,6 @@ import java.util.concurrent.Executors;
 
 import com.example.cameraapp.model.AbnormalRecord;
 import com.example.cameraapp.model.AbnormalRepository;
-import com.example.cameraapp.yolo.YoloDetector;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -65,7 +64,6 @@ public class MainActivity extends AppCompatActivity {
     private ExecutorService cameraExecutor;
     private FusedLocationProviderClient fusedLocationClient;
 
-    private YoloDetector yoloDetector;
     private PlantClassifier plantClassifier;
     private InferencePipeline pipeline;
 
@@ -112,10 +110,9 @@ public class MainActivity extends AppCompatActivity {
         currentCellIndex = getIntent().getIntExtra("cell_index", 1);
 
         try {
-            yoloDetector = new YoloDetector(this);
             plantClassifier = new PlantClassifier(this, selectedPlant);
             // デフォルトで閾値 0.25f の Config が使用されるように InferencePipeline を修正済み
-            pipeline = new InferencePipeline(yoloDetector, bmp -> plantClassifier.classifyImage(bmp));
+            pipeline = new InferencePipeline(bmp -> plantClassifier.classifyImage(bmp));
             pipeline.setContext(this);
         } catch (Exception e) {
             Log.e("MainActivity", "Init error", e);

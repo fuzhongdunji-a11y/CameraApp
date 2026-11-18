@@ -34,11 +34,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import com.example.cameraapp.model.AbnormalRepository;
-import com.example.cameraapp.yolo.YoloDetector;
 
 public class OfflineImportActivity extends AppCompatActivity {
 
-    private YoloDetector yoloDetector;
     private PlantClassifier plantClassifier;
     private InferencePipeline pipeline;
     private String plantType;
@@ -77,9 +75,8 @@ public class OfflineImportActivity extends AppCompatActivity {
         spinnerPlant = findViewById(R.id.spinnerPlant);
 
         try {
-            yoloDetector = new YoloDetector(this);
             // Pipelineの初期化 (後でモデルをロード)
-            pipeline = new InferencePipeline(yoloDetector, bmp -> 
+            pipeline = new InferencePipeline(bmp -> 
                 plantClassifier != null ? plantClassifier.classifyImage(bmp) : new ClassificationResult("Unknown", 0f));
             pipeline.setContext(this);
         } catch (Exception e) {

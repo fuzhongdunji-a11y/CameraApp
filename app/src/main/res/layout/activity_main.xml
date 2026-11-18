@@ -69,10 +69,5 @@
             <Button android:id="@+id/btnVoice" android:text="音声開始" android:layout_columnWeight="1"/>
         </GridLayout>
 
-        <com.example.cameraapp.yolo.BoundingBoxView
-            android:id="@+id/boxView"
-            android:layout_width="match_parent"
-            android:layout_height="1dp" />
-
     </LinearLayout>
 </ScrollView>

@@ -614,3 +614,27 @@
     （同じ構成の zip と、git clone したフォルダからの変換は確認済み）。
 - 福重の train/valid のフォルダ名はピーマンとトマトしか確認していない。他の作物は --like で合わせるのがおすすめ。
 - PlantDoc はラベルの誤りが報告されているデータセットで、健康の葉に病気らしい葉が混ざっていることがある。
+
+========================================
+2026-11-18  アプリから YOLO（yolo_plant_detect.tflite）を外す
+========================================
+
+■ 外した理由
+- yolo_plant_detect.tflite は出力が 80 クラス（84×8400）の汎用の物体検出モデル（COCO：人・車・花瓶など）で、
+    葉を検出できなかった（PlantDoc のピーマンの写真 12 枚で「花瓶」「人」「鳥」などと判定）。
+- アプリでは YoloDetector を作るだけで detect() はどこからも呼ばれておらず、判定にも枠の表示にも使われていなかった。
+- 出力の形から Ultralytics の YOLO の学習済みモデルと思われ、そのライセンス（AGPL-3.0）は商用アプリでの配布に条件がある。
+
+■ 変更内容
+- app/src/main/assets/yolo_plant_detect.tflite を削除。
+- yolo/YoloDetector.java、yolo/BoundingBoxView.java、yolo/BoxData.java を削除。
+- activity_main.xml の BoundingBoxView（高さ 1dp で表示されていなかった）を削除。
+- InferencePipeline のコンストラクタから YoloDetector の引数を削除。MainActivity・OfflineImportActivity の呼び出しも合わせて変更。
+- CropUtils.crop() を、YOLO の結果ではなく RectF（左上・右下）で切り出す形に変更（葉の検出モデルで使う予定）。
+
+■ 元に戻す方法
+- この変更は 1 つのコミットにまとめてある。git revert <このコミット> で元に戻せる。
+    外す前の状態はコミット 3c5323e。
+
+■ 未確認事項
+- この環境には Android SDK がないため、ビルドは未確認。
