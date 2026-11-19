@@ -550,3 +550,176 @@
 ■ 未確認事項
 - 判定ごとの確信度（%）と、ピーマン以外の作物での実機確認は未確認。
 - 圃場（ハウス内）で撮った画像での精度は未評価。
+
+========================================
+2026-11-16  W&B に記録しながら分類モデルを追加学習するスクリプトを追加
+========================================
+
+■ tools/train_wandb.py（新規）
+- 2025/学習用/trainnig.py と同じ2段階の追加学習（判定の層だけ → DenseNet121 の後半も）を行い、
+    Weights & Biases（W&B）に次を記録する。
+    - エポックごとの loss / accuracy / val_loss / val_accuracy（2段階を通した通し番号）
+    - 学習後の検証データの正解率・マクロ平均F1・2値（健康 / それ以外）の適合率・再現率・F1・見逃し・誤検出
+    - 混同行列、クラス別の表
+    - 間違えた画像の一覧（元画像・Grad-CAM・予測・確率。確信度が高いのに間違えたものから順に）
+    - 学習済みモデル（.h5、--export_tflite で .tflite も）を W&B の Artifact として保存
+- 元のスクリプトからの変更点:
+    - 2段階目で DenseNet121 自体の trainable も True にする（入れ子のモデルは親が False のままだと、
+      Keras のバージョンによっては中の層が学習されないため）。
+    - 2段階目でも BatchNormalization 層は固定する。
+    - 学習データの拡張（--augment none / light / strong）を追加。読み込み時にかけるのでモデルには入らない。
+    - 早期終了（--patience）、テストデータでの評価（--test）、tflite の書き出しと精度確認（--export_tflite）を追加。
+- 画像は 0〜255 のまま渡す（モデル内部の Rescaling に任せる。アプリと同じ）。
+
+■ tools/sweep_pepper.yaml（新規）
+- W&B Sweep でピーマンの学習率・学習させる層数・データ拡張の組み合わせを自動で探索する設定。
+    指標は検証データのマクロ平均F1（valid/macro_f1）。
+
+■ .gitignore
+- train_out/、wandb/ を追加。
+
+■ 未確認事項
+- 乱数で作ったダミー画像と、同じ構成で重みが乱数のダミーモデルで、W&B をオフラインにして最後まで動くことを確認
+    （TensorFlow 2.21 / wandb 0.31）。実際の学習データと W&B のサイトへの送信は未確認。
+- 福重の PC の TensorFlow のバージョンは未確認。
+
+========================================
+2026-11-17  PlantDoc（背景のある実環境の葉）を評価用フォルダに変換するスクリプトを追加
+========================================
+
+■ tools/prepare_plantdoc.py（新規）
+- PlantDoc（pratikkayal/PlantDoc-Object-Detection-Dataset、CC BY 4.0）を GitHub から zip でダウンロードし、
+    枠（バウンディングボックス）ごとに葉を切り出して、学習データと同じ <作物>/<クラス>/ の構成で保存する。
+    出力: plantdoc_crops/train、plantdoc_crops/test、plantdoc_crops/manifest.csv（切り出し元の一覧）。
+- 「〜 leaf」だけのクラスは healthy に、モデルにある病気はそのクラスに入れる。
+    PlantDoc にないクラスは空フォルダを作り、evaluate_models.py のクラス番号とモデルの出力をそろえる。
+- --like に学習データの valid フォルダを渡すと、クラスのフォルダ名をそこに合わせる（キーワードで対応付け）。
+- トマトのモデルにない病気（細菌性斑点病・セプトリア・モザイク・黄化葉巻・ハダニ）は extra/ に分けて保存。
+- 画像サイズがアノテーションと違うもの: EXIF の回転で合うものは回転、縮小されたものは枠を拡大縮小して切り出す。
+    同じファイル名に別画像のアノテーションが混ざっているもの（2枠）と、短い辺が 32 ピクセル未満の枠は使わない。
+- ファイル名に Windows で使えない文字（? など）があるため、zip は展開せずに直接読む。
+
+■ .gitignore
+- plantdoc_src/、plantdoc_crops/ を追加。
+
+■ 確認したこと
+- git clone した PlantDoc で全作物を変換（約40秒）。切り出した画像を目で確認。
+- アプリの tflite（学習し直す前のもの）を evaluate_models.py で評価した結果（PlantDoc の train と test は
+    どちらもアプリのモデルの学習に使っていないので、両方とも評価に使える）:
+    ピーマン 正解率 68.8%（train、557枚）/ 80.8%（test、26枚）。元の検証データでは 99.3%。
+    他の作物も 3〜75% に下がった（モモは 589枚中 572枚を病気と判定）。
+
+■ 未確認事項
+- この環境からは GitHub の zip のダウンロードがネットワーク制限で 403 になるため、--download は未確認
+    （同じ構成の zip と、git clone したフォルダからの変換は確認済み）。
+- 福重の train/valid のフォルダ名はピーマンとトマトしか確認していない。他の作物は --like で合わせるのがおすすめ。
+- PlantDoc はラベルの誤りが報告されているデータセットで、健康の葉に病気らしい葉が混ざっていることがある。
+
+========================================
+2026-11-18  アプリから YOLO（yolo_plant_detect.tflite）を外す
+========================================
+
+■ 外した理由
+- yolo_plant_detect.tflite は出力が 80 クラス（84×8400）の汎用の物体検出モデル（COCO：人・車・花瓶など）で、
+    葉を検出できなかった（PlantDoc のピーマンの写真 12 枚で「花瓶」「人」「鳥」などと判定）。
+- アプリでは YoloDetector を作るだけで detect() はどこからも呼ばれておらず、判定にも枠の表示にも使われていなかった。
+- 出力の形から Ultralytics の YOLO の学習済みモデルと思われ、そのライセンス（AGPL-3.0）は商用アプリでの配布に条件がある。
+
+■ 変更内容
+- app/src/main/assets/yolo_plant_detect.tflite を削除。
+- yolo/YoloDetector.java、yolo/BoundingBoxView.java、yolo/BoxData.java を削除。
+- activity_main.xml の BoundingBoxView（高さ 1dp で表示されていなかった）を削除。
+- InferencePipeline のコンストラクタから YoloDetector の引数を削除。MainActivity・OfflineImportActivity の呼び出しも合わせて変更。
+- CropUtils.crop() を、YOLO の結果ではなく RectF（左上・右下）で切り出す形に変更（葉の検出モデルで使う予定）。
+
+■ 元に戻す方法
+- この変更は 1 つのコミットにまとめてある。git revert <このコミット> で元に戻せる。
+    外す前の状態はコミット 3c5323e。
+
+■ 未確認事項
+- この環境には Android SDK がないため、ビルドは未確認。
+
+========================================
+2026-11-18  葉の検出モデル（MediaPipe Model Maker）の学習・評価スクリプトを追加
+========================================
+
+■ tools/train_leaf_detector.py（新規）
+- PlantDoc の葉の枠を「leaf」1クラスの Pascal VOC に変換し、MediaPipe Model Maker（Apache 2.0）で
+    葉の検出モデルを学習して leaf_detector.tflite に書き出す。
+- ピーマンが写っている画像（132枚）は学習に使わず pepper_holdout に分ける（切り出しの効果の評価用）。
+- Python 3.11 の別環境で mediapipe==0.10.14 に固定して使う（固定しないと合わない版が入った）。Windows では動かない。
+
+■ tools/evaluate_leaf_crop.py（新規）
+- pepper_holdout の写真で、分類モデルに「画像全体」を渡す場合と「検出した葉を切り出して」渡す場合の正答率を比べる。
+
+■ .gitignore
+- leaf_out/ を追加。
+
+■ 確認したこと（CPU で 30 エポック、約80分）
+- 検出モデルの検証（ピーマン以外の PlantDoc test 219枚）: AP50 0.882、AP 0.620。
+- ピーマンの保留画像 132枚（病気 71 / 健康 61）、アプリの pepper_model.tflite（学習し直す前のもの）、検出のしきい値 0.3:
+    画像全体                         正答率 65.9%（見逃し 12、誤検出 33）
+    検出1位の葉だけ                   正答率 69.7%（見逃し 21、誤検出 19）
+    検出した葉（最大5枚）の平均       正答率 75.8%（見逃し 17、誤検出 15）
+    検出した葉のどれかが病気なら病気 正答率 65.9%（見逃し  8、誤検出 37）
+- ピーマンの葉の検出率（正解の枠と IoU 0.5 以上）は 58.9%。
+
+■ 未確認事項
+- アプリへの組み込み（検出 → 切り出し → 分類）はまだ行っていない。
+- PlantDoc で学習し直した分類モデル（71c4ly1v など）での評価は未実施。保留画像の一部がその学習に使われているため、
+    そのまま評価すると結果が良く出すぎる。
+- 132枚での比較なので、差には数ポイントの誤差がある。
+
+========================================
+2026-11-18  ピーマンの病気/健康を検出するモデル（Model Maker）の学習・比較スクリプトを追加
+========================================
+
+■ tools/train_pepper_disease_detector.py（新規）
+- PlantVillage のピーマン（葉の外接枠は色から自動で付ける）と PlantDoc のピーマンで、
+    「pepper_spot / pepper_healthy」の2クラス検出モデルを MediaPipe Model Maker で学習する。
+- PlantDoc の写真は写真単位で k 分割（既定 3）し、交差検証で次の方法の正答率・見逃し・誤検出を比べる:
+    A 画像全体 → 分類モデル（今のアプリ）、B 葉を切り出し → 分類モデル、C/C2 2クラス検出モデル、E B と C2 の平均。
+    しきい値 0.2〜0.5 ごとに出すので、見逃しを減らしたいときのしきい値を選べる。
+- --final で、PlantDoc を全部使った最終モデルも作る。
+- 今後の本番の学習はデスクトップの GPU（RTX 4070、WSL）で行う（福重の指示、2026-11-18）。
+
+■ .gitignore
+- dis_out/、pv/ を追加。
+
+■ 未確認事項
+- GPU 環境（TensorFlow 2.15 の GPU 版）での実行は未確認。こちらでは CPU で各20エポック・PlantVillage 各300枚で試している。
+
+========================================
+2026-11-19  ML Kit の被写体の切り抜きで葉を切り出し、分類モデルを学習し直すスクリプトを追加
+========================================
+
+■ app/build.gradle.kts / app/src/main/AndroidManifest.xml
+- ML Kit Subject Segmentation（play-services-mlkit-subject-segmentation:16.0.0-beta1、ベータ版）を追加。
+- 切り抜きのモデルをインストール時に取得する meta-data（subject_segment）を追加。
+
+■ app/src/main/java/com/example/cameraapp/inference/SubjectCropper.java（新規）
+- 写真から被写体全部（fg）と被写体1つずつ（subject、面積の大きい順に最大5個）を切り出す。
+- 切り出し方は「輪郭の外を黒で塗る（mask）」と「外接枠で切り出すだけ（box）」の2通り。
+- まだアプリの判定（InferencePipeline）には組み込んでいない。
+
+■ app/src/debug/（新規。debug ビルドだけに入る）
+- tools/SegExportActivity.java: files/seg_in の写真を一括で切り抜き、files/seg_out に画像と manifest.csv を書き出す。
+    adb shell am start -n com.example.cameraapp/.tools.SegExportActivity で起動する。
+- AndroidManifest.xml: 上の画面を exported="true" で登録。
+
+■ tools/train_pepper_seg_classifier.py（新規）
+- prepare: スマホで切り抜く写真（PlantDoc のピーマン 132枚、PlantVillage、農園の健康な写真）を seg_in に集める。
+- train: 切り抜いた画像で元の分類モデルから学習し直し、写真単位の3分割で
+    A（画像全体・今のアプリ）、S0（切り抜き → 元のモデル）、S1（切り抜き → 学習し直したモデル）、
+    E（S1 と 2クラス検出モデルの C2 の平均）の正答率・見逃し・誤検出を、しきい値 0.2〜0.5 ごとに出す。
+- 分割は train_pepper_disease_detector.py と同じ（seed 0）なので、その eval_rows.json と組み合わせられる。
+- 農園の健康な写真は学習に「健康」として入れ、評価では誤検出の枚数だけを別に出す。
+
+■ .gitignore
+- seg_in/、seg_out/、seg_cls_out/、__pycache__/ を追加。
+
+■ 未確認事項
+- Android のビルドは未確認（この環境に Android SDK がない）。ML Kit の切り抜きの実機での動作も未確認。
+- 学習スクリプトは、偽の切り抜き（中央や左上を切り出したもの）と各1エポックで、最後まで動くことだけを CPU で確認した。
+    精度はまだ測っていない。
+- 元のピーマンのモデル（pepper_model.h5）が TensorFlow 2.15 で読めるかは未確認（Keras 3 で保存した .h5 は読めない）。

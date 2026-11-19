@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 学習データ作成用（debug ビルドだけ）。adb shell am start で起動するので exported="true" -->
+    <application>
+        <activity android:name=".tools.SegExportActivity" android:exported="true" />
+    </application>
+</manifest>

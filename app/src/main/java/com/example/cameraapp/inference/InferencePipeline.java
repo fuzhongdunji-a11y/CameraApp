@@ -13,15 +13,12 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
-import com.example.cameraapp.yolo.YoloDetector;
-
 public class InferencePipeline {
 
     public interface ClassifierCallback {
         ClassificationResult classify(Bitmap bitmap);
     }
 
-    private final YoloDetector yoloDetector;
     private final Config config;
     private final ClassifierCallback classifier;
     private Context context;
@@ -51,14 +48,13 @@ public class InferencePipeline {
         public float getGreenRatio() { return greenRatio; }
     }
 
-    public InferencePipeline(YoloDetector yoloDetector, Config config, ClassifierCallback classifier) {
-        this.yoloDetector = yoloDetector;
+    public InferencePipeline(Config config, ClassifierCallback classifier) {
         this.config = config != null ? config : new Config();
         this.classifier = classifier;
     }
 
-    public InferencePipeline(YoloDetector yoloDetector, ClassifierCallback classifier) {
-        this(yoloDetector, new Config(), classifier);
+    public InferencePipeline(ClassifierCallback classifier) {
+        this(new Config(), classifier);
     }
 
     public Config getConfig() { return config; }

@@ -80,6 +80,8 @@ dependencies {
     implementation(libs.firebase.inappmessaging)
     implementation("org.tensorflow:tensorflow-lite:2.13.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.3")
+    // 被写体の切り抜き（ML Kit Subject Segmentation、ベータ版）。葉の切り出しに使う
+    implementation("com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1")
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

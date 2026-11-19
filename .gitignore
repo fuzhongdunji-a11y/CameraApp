@@ -31,3 +31,14 @@ amplifyconfiguration*
 # 評価スクリプトの出力
 eval_out/
 gradcam_out/
+train_out/
+wandb/
+plantdoc_src/
+plantdoc_crops/
+leaf_out/
+dis_out/
+pv/
+seg_in/
+seg_out/
+seg_cls_out/
+__pycache__/

@@ -1,0 +1,51 @@
+# W&B Sweep（ハイパーパラメータの自動探索）の設定。ピーマン用。
+#
+# 使い方（CameraApp フォルダで実行）:
+#   1. このファイルの base_model / train / valid のパスを自分の環境に合わせて書き換える
+#   2. wandb sweep tools/sweep_pepper.yaml
+#        → 「wandb agent ユーザー名/cameraapp-plant/xxxxxxxx」という行が表示される
+#   3. 表示されたコマンドに --count 10 を付けて実行（10通り試す）
+#        wandb agent ユーザー名/cameraapp-plant/xxxxxxxx --count 10
+#
+# 1回の学習に時間がかかるので、最初は epochs を小さくして傾向を見るのがおすすめ。
+# 他の作物で使うときは、このファイルをコピーしてパスと名前を書き換える。
+
+program: tools/train_wandb.py
+project: cameraapp-plant
+name: pepper-sweep
+method: bayes
+metric:
+  name: valid/macro_f1
+  goal: maximize
+parameters:
+  lr_head:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.003
+  lr_finetune:
+    distribution: log_uniform_values
+    min: 0.000003
+    max: 0.0001
+  finetune_layers:
+    values: [0, 30, 60, 120]
+  augment:
+    values: ["none", "light", "strong"]
+  epochs_head:
+    value: 5
+  epochs_finetune:
+    value: 10
+  patience:
+    value: 3
+  crop:
+    value: Pepper
+  base_model:
+    value: "C:\\Users\\fuzho\\Downloads\\plant-disease-detection-model-tensorflow2-default-v1\\Models\\.h5\\pepper_model.h5"
+  train:
+    value: "C:\\Users\\fuzho\\Downloads\\archive (2)\\train\\Pepper"
+  valid:
+    value: "C:\\Users\\fuzho\\Downloads\\archive (2)\\valid\\Pepper"
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args}

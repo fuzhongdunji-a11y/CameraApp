@@ -17,6 +17,8 @@
 
 
     <application android:allowBackup="true" android:label="@string/app_name" android:supportsRtl="true" android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+        <!-- ML Kit の被写体の切り抜きモデルを、インストール時に Google Play 開発者サービスから取得する -->
+        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="subject_segment" />
         <activity android:name=".StartActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
