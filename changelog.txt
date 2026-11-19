@@ -716,7 +716,7 @@
 - 農園の健康な写真は学習に「健康」として入れ、評価では誤検出の枚数だけを別に出す。
 
 ■ .gitignore
-- seg_in/、seg_out/、seg_cls_out/ を追加。
+- seg_in/、seg_out/、seg_cls_out/、__pycache__/ を追加。
 
 ■ 未確認事項
 - Android のビルドは未確認（この環境に Android SDK がない）。ML Kit の切り抜きの実機での動作も未確認。

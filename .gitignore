@@ -41,3 +41,4 @@ pv/
 seg_in/
 seg_out/
 seg_cls_out/
+__pycache__/
