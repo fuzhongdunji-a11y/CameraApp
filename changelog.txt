@@ -688,3 +688,38 @@
 
 ■ 未確認事項
 - GPU 環境（TensorFlow 2.15 の GPU 版）での実行は未確認。こちらでは CPU で各20エポック・PlantVillage 各300枚で試している。
+
+========================================
+2026-11-19  ML Kit の被写体の切り抜きで葉を切り出し、分類モデルを学習し直すスクリプトを追加
+========================================
+
+■ app/build.gradle.kts / app/src/main/AndroidManifest.xml
+- ML Kit Subject Segmentation（play-services-mlkit-subject-segmentation:16.0.0-beta1、ベータ版）を追加。
+- 切り抜きのモデルをインストール時に取得する meta-data（subject_segment）を追加。
+
+■ app/src/main/java/com/example/cameraapp/inference/SubjectCropper.java（新規）
+- 写真から被写体全部（fg）と被写体1つずつ（subject、面積の大きい順に最大5個）を切り出す。
+- 切り出し方は「輪郭の外を黒で塗る（mask）」と「外接枠で切り出すだけ（box）」の2通り。
+- まだアプリの判定（InferencePipeline）には組み込んでいない。
+
+■ app/src/debug/（新規。debug ビルドだけに入る）
+- tools/SegExportActivity.java: files/seg_in の写真を一括で切り抜き、files/seg_out に画像と manifest.csv を書き出す。
+    adb shell am start -n com.example.cameraapp/.tools.SegExportActivity で起動する。
+- AndroidManifest.xml: 上の画面を exported="true" で登録。
+
+■ tools/train_pepper_seg_classifier.py（新規）
+- prepare: スマホで切り抜く写真（PlantDoc のピーマン 132枚、PlantVillage、農園の健康な写真）を seg_in に集める。
+- train: 切り抜いた画像で元の分類モデルから学習し直し、写真単位の3分割で
+    A（画像全体・今のアプリ）、S0（切り抜き → 元のモデル）、S1（切り抜き → 学習し直したモデル）、
+    E（S1 と 2クラス検出モデルの C2 の平均）の正答率・見逃し・誤検出を、しきい値 0.2〜0.5 ごとに出す。
+- 分割は train_pepper_disease_detector.py と同じ（seed 0）なので、その eval_rows.json と組み合わせられる。
+- 農園の健康な写真は学習に「健康」として入れ、評価では誤検出の枚数だけを別に出す。
+
+■ .gitignore
+- seg_in/、seg_out/、seg_cls_out/ を追加。
+
+■ 未確認事項
+- Android のビルドは未確認（この環境に Android SDK がない）。ML Kit の切り抜きの実機での動作も未確認。
+- 学習スクリプトは、偽の切り抜き（中央や左上を切り出したもの）と各1エポックで、最後まで動くことだけを CPU で確認した。
+    精度はまだ測っていない。
+- 元のピーマンのモデル（pepper_model.h5）が TensorFlow 2.15 で読めるかは未確認（Keras 3 で保存した .h5 は読めない）。

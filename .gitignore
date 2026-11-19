@@ -38,3 +38,6 @@ plantdoc_crops/
 leaf_out/
 dis_out/
 pv/
+seg_in/
+seg_out/
+seg_cls_out/
